@@ -1,0 +1,11 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      - SPRING_DATASOURCE_URL=jdbc:h2:mem:politeai
+      - JWT_SECRET=local-dev-secret-key-that-is-at-least-64-characters-long-for-hmac
+      - JWT_EXPIRATION=86400000
+    restart: unless-stopped
