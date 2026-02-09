@@ -167,7 +167,7 @@ export default function HomePage() {
             </p>
             <Link
               to="/admin"
-              onClick={() => setLoggedIn('admin@politeai.com', true)}
+              onClick={() => setLoggedIn({ email: 'admin@politeai.com', loginId: 'admin', name: 'Admin', token: 'dev-token' }, true)}
               className="inline-block mt-2 text-xs text-text-secondary/40 hover:text-text-secondary"
               style={{
                 opacity: isReady ? 1 : 0,

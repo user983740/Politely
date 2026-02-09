@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/shared/store';
 
 export default function Header() {
-  const { isLoggedIn, isAdmin, email, setLoggedOut } = useAuthStore();
+  const { isLoggedIn, isAdmin, loginId, setLoggedOut } = useAuthStore();
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -17,7 +17,7 @@ export default function Header() {
         <nav className="hidden sm:flex items-center gap-4 text-sm">
           {isLoggedIn ? (
             <>
-              <span className="text-text-secondary truncate max-w-32">{email}</span>
+              <span className="text-text-secondary truncate max-w-32">{loginId}</span>
               {isAdmin && (
                 <Link to="/admin" className="text-text-secondary hover:text-text transition-colors">
                   Admin
@@ -73,7 +73,7 @@ export default function Header() {
         <nav className="sm:hidden border-t border-border bg-white px-4 py-3 flex flex-col gap-3 text-sm">
           {isLoggedIn ? (
             <>
-              <span className="text-text-secondary truncate">{email}</span>
+              <span className="text-text-secondary truncate">{loginId}</span>
               {isAdmin && (
                 <Link to="/admin" onClick={() => setMenuOpen(false)} className="text-text-secondary hover:text-text transition-colors">
                   Admin

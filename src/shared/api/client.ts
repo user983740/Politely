@@ -1,5 +1,16 @@
 import { API_BASE_URL } from '@/shared/config/constants';
 
+export class ApiError extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -25,7 +36,12 @@ class ApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      throw new Error(`API error: ${res.status}`);
+      const data = await res.json().catch(() => null);
+      throw new ApiError(
+        res.status,
+        data?.error ?? 'UNKNOWN_ERROR',
+        data?.message ?? `API error: ${res.status}`,
+      );
     }
     return res.json();
   }
@@ -35,7 +51,12 @@ class ApiClient {
       headers: this.getHeaders(),
     });
     if (!res.ok) {
-      throw new Error(`API error: ${res.status}`);
+      const data = await res.json().catch(() => null);
+      throw new ApiError(
+        res.status,
+        data?.error ?? 'UNKNOWN_ERROR',
+        data?.message ?? `API error: ${res.status}`,
+      );
     }
     return res.json();
   }

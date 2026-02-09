@@ -1,6 +1,6 @@
-package com.politeai.interfaces.api.dto;
+package com.politeai.application.auth;
 
-public record AuthResponse(
+public record AuthResult(
         String token,
         String email,
         String loginId,
