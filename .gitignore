@@ -1,3 +1,7 @@
+# Project docs (local only)
+CLAUDE.md
+docs/
+
 # Dependencies
 node_modules/
 
