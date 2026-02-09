@@ -4,7 +4,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * PoliteAi application entry point.
+ * PoliteAi - Korean tone transformation service.
  */
 @SpringBootApplication
 public class PoliteAiApplication {
