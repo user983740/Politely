@@ -230,6 +230,17 @@ Used **only as supplementary condition**. Server controls the full prompt struct
 - Minimal
 - Notion / Linear-style productivity tool aesthetic
 
+### 5.3 Responsive Design (Mobile-first)
+
+- **Mobile-first approach**: All layouts start at mobile width and scale up with `sm:` / `lg:` breakpoints
+- **Breakpoints**: `sm` (640px), `lg` (1024px) via Tailwind CSS
+- **Header**: Hamburger menu on mobile (`< sm`), inline nav on desktop (`>= sm`)
+- **Main page**: Single-column stacked layout on mobile, two-column grid on desktop (`>= lg`)
+- **Admin dashboard**: 2-column stat cards on mobile, 4-column on desktop; horizontal scroll for heatmap table
+- **Touch targets**: Minimum 44px tap area for interactive elements on mobile
+- **Typography**: Responsive font sizes (e.g., `text-xl sm:text-2xl`) for readability across screen sizes
+- **Spacing**: Tighter padding/gaps on mobile (e.g., `p-4 sm:p-6`, `gap-3 sm:gap-4`)
+
 ---
 
 ## 6. Technical Architecture
@@ -243,14 +254,66 @@ Used **only as supplementary condition**. Server controls the full prompt struct
 
 ## 7. Data & Metrics Tracking (MVP Core)
 
+### 7.1 User Metrics
+
 | Metric | Meaning |
 |--------|---------|
-| DAU / WAU | Usage frequency |
-| Transformation request count | Core usage volume |
-| **Partial re-transformation ratio** | Quality satisfaction signal |
-| Persona/situation selection distribution | PMF assessment |
-| Average input length | Actual usage context |
-| Return visit interval | Habit formation |
+| Total registered users | Growth tracking |
+| New signups per day | Acquisition rate |
+| DAU / WAU / MAU | Usage frequency |
+| WAU/DAU ratio | Stickiness |
+
+### 7.2 Usage Metrics
+
+| Metric | Meaning |
+|--------|---------|
+| Total transformation requests | Core usage volume |
+| Transformations per user (avg) | Engagement depth |
+| **Partial re-transformation count & ratio** | Quality satisfaction signal |
+| Full re-transformation count | Dissatisfaction signal |
+| Copy button click count & rate | Result usefulness |
+| User prompt usage rate | How often users add custom directions |
+| Avg transformations per session | Session engagement |
+
+### 7.3 Content Metrics
+
+| Metric | Meaning |
+|--------|---------|
+| Persona selection distribution | Which relationships matter most |
+| Context selection distribution | Which situations are most common |
+| Tone level distribution | Preferred politeness level |
+| Persona × Context combination heatmap | PMF signal for specific use cases |
+| Average input text length | Actual usage context |
+| Average output text length | Output characteristics |
+
+### 7.4 Retention Metrics
+
+| Metric | Meaning |
+|--------|---------|
+| D1 / D3 / D7 retention | Early habit formation |
+| Return visit interval | Usage pattern |
+| Churn rate (7-day inactive) | User loss tracking |
+
+### 7.5 Performance & Cost Metrics
+
+| Metric | Meaning |
+|--------|---------|
+| Avg API response time | User experience quality |
+| API error rate | Reliability |
+| API calls per day | Cost baseline |
+| Estimated daily API cost | Budget tracking |
+| Cost per transformation | Unit economics |
+| Cost savings from partial vs full re-transforms | Partial rewrite ROI |
+
+### 7.6 Admin Dashboard
+
+Admin-only page (`/admin`) accessible to admin accounts. Displays all above metrics with:
+
+- **Overview cards**: Total users, DAU, total transformations today, API cost today
+- **Usage charts**: Daily transformation trend (line), persona distribution (bar), context distribution (bar)
+- **Retention table**: D1/D3/D7 cohort retention
+- **Persona × Context heatmap**: Combination frequency matrix
+- **Real-time indicators**: API response time, error rate
 
 ---
 
