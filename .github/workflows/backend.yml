@@ -12,7 +12,7 @@ on:
 
 env:
   AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: politeai-backend
+  ECR_REPOSITORY: polite-ai-backend
   JAVA_VERSION: '21'
 
 jobs:
