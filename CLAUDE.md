@@ -86,6 +86,32 @@ cd backend && ./gradlew test
 | POST | `/api/v1/transform` | Full text transformation |
 | POST | `/api/v1/transform/partial` | Partial rewrite (selected text only) |
 
+## API Documentation (Swagger / OpenAPI)
+
+- **Swagger UI**: http://localhost:8080/swagger-ui/index.html
+- **OpenAPI JSON**: http://localhost:8080/v3/api-docs
+
+> **TODO (도메인 연결 후 업데이트 필요):**
+> 가비아 네임서버 → Route 53 연결 및 커스텀 도메인(예: `api.politeai.com`) 설정이 완료되면,
+> 위 URL을 `https://api.politeai.com/swagger-ui/index.html` 등으로 업데이트하고
+> Spring Boot의 OpenAPI server URL 설정도 커스텀 도메인으로 변경할 것.
+
+## Responsive Design
+
+Mobile-first approach using Tailwind CSS breakpoints (`sm: 640px`, `lg: 1024px`).
+
+| Breakpoint | Layout |
+|------------|--------|
+| `< sm` (mobile) | Single column, hamburger nav, compact spacing/font |
+| `>= sm` (tablet) | Inline header nav, relaxed spacing |
+| `>= lg` (desktop) | Two-column main layout, 4-column admin grid, sticky result panel |
+
+Key patterns:
+- Responsive spacing: `p-4 sm:p-6`, `gap-3 sm:gap-4`, `py-6 sm:py-8`
+- Responsive typography: `text-xl sm:text-2xl`, `text-xs sm:text-sm`
+- Horizontal scroll for wide tables (heatmap) on mobile with `overflow-x-auto`
+- `flex-wrap` for chip groups and retention metrics
+
 ## Constraints
 
 - Original text: max 1,000 characters
