@@ -21,6 +21,7 @@ interface TransformState {
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
   setTierInfo: (info: TierInfo) => void;
+  resetForNewInput: () => void;
   reset: () => void;
 }
 
@@ -52,5 +53,7 @@ export const useTransformStore = create<TransformState>((set) => ({
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
   setTierInfo: (tierInfo) => set({ tierInfo }),
+  resetForNewInput: () =>
+    set({ originalText: '', userPrompt: '', transformedText: '', transformError: null }),
   reset: () => set(initialState),
 }));

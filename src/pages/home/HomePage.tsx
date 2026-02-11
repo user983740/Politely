@@ -1,7 +1,7 @@
 import {useEffect, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {useAuthStore, useTransformStore} from '@/shared/store';
-import {PERSONAS, CONTEXTS} from '@/shared/config/constants';
+import {PERSONAS, CONTEXTS, MAX_PROMPT_LENGTH} from '@/shared/config/constants';
 import type {Persona, Context, ToneLevel} from '@/shared/config/constants';
 import {ResultPanel} from '@/widgets/result-panel';
 import {transformText, getTierInfo} from '@/features/transform/api';
@@ -72,6 +72,7 @@ export default function HomePage() {
     contexts,
     toneLevel,
     originalText,
+    userPrompt,
     transformedText,
     isTransforming,
     transformError,
@@ -80,13 +81,26 @@ export default function HomePage() {
     toggleContext,
     setToneLevel,
     setOriginalText,
+    setUserPrompt,
     setTransformedText,
     setIsTransforming,
     setTransformError,
     setTierInfo,
+    resetForNewInput,
   } = useTransformStore();
 
-  const [settingsOpen, setSettingsOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isPaidOverride, setIsPaidOverride] = useState(false);
+
+  const handleTierToggle = () => {
+    const next = !isPaidOverride;
+    setIsPaidOverride(next);
+    if (next) {
+      setTierInfo({tier: 'PAID', maxTextLength: 1000, partialRewriteEnabled: true, promptEnabled: true});
+    } else {
+      setTierInfo({tier: 'FREE', maxTextLength: 300, partialRewriteEnabled: false, promptEnabled: false});
+    }
+  };
 
   useEffect(() => {
     if (!toneLevel) setToneLevel('POLITE');
@@ -129,6 +143,7 @@ export default function HomePage() {
         contexts,
         toneLevel,
         originalText,
+        ...(tierInfo?.promptEnabled && userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
       });
       setTransformedText(response.transformedText);
     } catch (err) {
@@ -255,6 +270,68 @@ export default function HomePage() {
     </>
   );
 
+  // ===== RESULT MODE =====
+  if (hasResult) {
+    return (
+      <div className="h-screen flex flex-col bg-white">
+        {/* Result mode top bar */}
+        <header className="flex items-center justify-between px-4 sm:px-8 lg:px-10 py-4 sm:py-5 border-b border-border shrink-0">
+          <div className="flex items-center gap-2.5">
+            <img
+              src="/politely_logo.png"
+              alt="Politely"
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg"
+            />
+            <span className="text-base sm:text-lg font-bold text-text">Politely</span>
+          </div>
+          <button
+            onClick={resetForNewInput}
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-text border border-border/60 rounded-xl hover:bg-surface transition-colors cursor-pointer"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="1 4 1 10 7 10" />
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+            </svg>
+            새로 입력하기
+          </button>
+        </header>
+
+        {/* Result content centered */}
+        <div className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
+          <div className="max-w-2xl mx-auto">
+            <ResultPanel />
+
+            {/* Selection summary chips */}
+            <div className="mt-6 pt-5 border-t border-border/60">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-text-secondary mr-1">설정</span>
+                {selectedPersonaLabel && (
+                  <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
+                    {selectedPersonaLabel}
+                  </span>
+                )}
+                {selectedContextLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full"
+                  >
+                    {label}
+                  </span>
+                ))}
+                {selectedToneLabel && (
+                  <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
+                    {selectedToneLabel}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ===== INPUT MODE =====
   return (
     <div className="h-screen flex flex-col lg:flex-row">
       {/* ===== MOBILE HEADER (hidden on desktop) ===== */}
@@ -268,6 +345,17 @@ export default function HomePage() {
           <span className="text-base font-bold text-text">Politely</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Tier toggle (mobile) */}
+          <button
+            onClick={handleTierToggle}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-full border border-border/60 text-xs cursor-pointer transition-colors"
+          >
+            <span className={isPaidOverride ? 'text-text-secondary' : 'font-semibold text-text'}>Free</span>
+            <div className={`relative w-7 h-4 rounded-full transition-colors ${isPaidOverride ? 'bg-accent' : 'bg-border'}`}>
+              <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${isPaidOverride ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+            </div>
+            <span className={isPaidOverride ? 'font-semibold text-accent' : 'text-text-secondary'}>Pro</span>
+          </button>
           {isLoggedIn ? (
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-white border border-border/60 flex items-center justify-center">
@@ -303,31 +391,39 @@ export default function HomePage() {
       <div className="lg:hidden shrink-0 border-b border-border bg-bg">
         {/* Settings content when open */}
         {settingsOpen && (
-          <div className="px-4 pt-4 pb-1 overflow-y-auto max-h-[60vh]">
+          <div className="px-4 pt-4 pb-1">
             {renderSettings()}
           </div>
         )}
 
-        {/* Collapsed: mini selection chips */}
-        {!settingsOpen && (persona || contexts.length > 0) && (
-          <div className="px-4 pt-3 pb-1 flex items-center gap-1.5 flex-wrap">
-            {persona && (
-              <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
-                {selectedPersonaLabel}
-              </span>
-            )}
-            {selectedContextLabels.map((label) => (
-              <span
-                key={label}
-                className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full"
-              >
-                {label}
-              </span>
-            ))}
-            {toneLevel && (
-              <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
-                {selectedToneLabel}
-              </span>
+        {/* Collapsed: mini selection chips or guide text */}
+        {!settingsOpen && (
+          <div className="px-4 pt-3 pb-1">
+            {persona || contexts.length > 0 ? (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {persona && (
+                  <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
+                    {selectedPersonaLabel}
+                  </span>
+                )}
+                {selectedContextLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full"
+                  >
+                    {label}
+                  </span>
+                ))}
+                {toneLevel && (
+                  <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
+                    {selectedToneLabel}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-text-secondary text-center">
+                아래를 눌러 받는 사람·상황·말투를 설정하세요
+              </p>
             )}
           </div>
         )}
@@ -380,7 +476,7 @@ export default function HomePage() {
                 {isLoggedIn ? name || loginId : 'Guest User'}
               </p>
               <p className="text-xs text-text-secondary">
-                {isLoggedIn ? loginId : 'Free Tier'}
+                {isPaidOverride ? 'Premium' : 'Free Tier'}
               </p>
             </div>
             {!isLoggedIn && (
@@ -392,6 +488,17 @@ export default function HomePage() {
               </Link>
             )}
           </div>
+          {/* Tier toggle (desktop) */}
+          <button
+            onClick={handleTierToggle}
+            className="mt-3 flex items-center gap-2 cursor-pointer group"
+          >
+            <span className={`text-xs transition-colors ${isPaidOverride ? 'text-text-secondary' : 'font-semibold text-text'}`}>Free</span>
+            <div className={`relative w-8 h-[18px] rounded-full transition-colors ${isPaidOverride ? 'bg-accent' : 'bg-border'}`}>
+              <div className={`absolute top-[3px] w-3 h-3 rounded-full bg-white shadow transition-transform ${isPaidOverride ? 'translate-x-[14px]' : 'translate-x-[3px]'}`} />
+            </div>
+            <span className={`text-xs transition-colors ${isPaidOverride ? 'font-semibold text-accent' : 'text-text-secondary'}`}>Premium</span>
+          </button>
         </div>
       </aside>
 
@@ -433,8 +540,8 @@ export default function HomePage() {
         </div>
 
         {/* Text input area */}
-        <div className="flex-1 overflow-y-auto px-4 sm:px-10 lg:px-14 pb-6 sm:pb-10 pt-5 lg:pt-0">
-          <div className="flex items-baseline justify-between mb-5 lg:mb-8">
+        <div className="flex-1 flex flex-col overflow-y-auto px-4 sm:px-10 lg:px-14 pb-2 sm:pb-10 pt-5 lg:pt-0">
+          <div className="flex items-baseline justify-between mb-3 sm:mb-5 lg:mb-8">
             <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-text">
               원문 입력
             </h1>
@@ -453,20 +560,33 @@ export default function HomePage() {
             maxLength={maxTextLength}
             value={originalText}
             onChange={(e) => setOriginalText(e.target.value)}
-            className="w-full min-h-[220px] sm:min-h-[280px] lg:min-h-[360px] text-base text-text leading-relaxed placeholder:text-text-secondary/40 resize-none outline-none bg-transparent"
+            className="w-full flex-1 min-h-[80px] sm:min-h-[280px] lg:min-h-[360px] text-base text-text leading-relaxed placeholder:text-text-secondary/40 resize-none outline-none bg-transparent"
           />
 
-          {/* Error message */}
-          {transformError && (
-            <div className="mt-4 p-4 rounded-xl bg-error/5 border border-error/20 text-sm text-error animate-fade-in-up">
-              {transformError}
+          {/* Additional prompt input (Premium only) */}
+          {tierInfo?.promptEnabled && (
+            <div className="mt-1 sm:mt-4 shrink-0">
+              <div className="flex items-center justify-between mb-1 sm:mb-2">
+                <label className="text-xs sm:text-sm font-medium text-text-secondary">추가 정보</label>
+                <span className={`text-xs tabular-nums ${userPrompt.length > 0 ? 'text-accent' : 'text-text-secondary/50'}`}>
+                  {userPrompt.length} / {MAX_PROMPT_LENGTH}
+                </span>
+              </div>
+              <input
+                type="text"
+                placeholder="예: 첫 거래처라 조심스러운 상황, 두 번째 요청이라 미안한 맥락"
+                maxLength={MAX_PROMPT_LENGTH}
+                value={userPrompt}
+                onChange={(e) => setUserPrompt(e.target.value)}
+                className="w-full px-3 sm:px-4 py-2 sm:py-3 text-sm text-text bg-surface border border-border/60 rounded-xl placeholder:text-text-secondary/40 outline-none focus:border-accent/40 transition-colors"
+              />
             </div>
           )}
 
-          {/* Result area */}
-          {hasResult && (
-            <div className="mt-8 pt-8 border-t border-border animate-fade-in-up">
-              <ResultPanel />
+          {/* Error message */}
+          {transformError && (
+            <div className="mt-3 sm:mt-4 p-4 rounded-xl bg-error/5 border border-error/20 text-sm text-error shrink-0">
+              {transformError}
             </div>
           )}
         </div>
