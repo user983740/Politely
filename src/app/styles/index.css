@@ -3,20 +3,20 @@
 @theme {
   --color-primary: #18181b;
   --color-primary-light: #3f3f46;
-  --color-accent: #38bdf8;
-  --color-accent-hover: #0ea5e9;
-  --color-accent-deep: #0284c7;
+  --color-accent: #18181b;
+  --color-accent-hover: #27272a;
+  --color-accent-deep: #09090b;
   --color-bg: #f8fafc;
   --color-surface: #f1f5f9;
   --color-border: #e2e8f0;
   --color-text: #0f172a;
   --color-text-secondary: #64748b;
-  --color-accent-light: #e0f2fe;
+  --color-accent-light: #f4f4f5;
   --color-success: #16a34a;
   --color-error: #dc2626;
   --color-warm: #f59e0b;
-  --color-hero-from: #e0f2fe;
-  --color-hero-to: #f0f9ff;
+  --color-hero-from: #f4f4f5;
+  --color-hero-to: #fafafa;
   --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
 }
 
@@ -48,4 +48,68 @@ body {
 
 @utility animate-fade-in {
   animation: fade-in 0.5s ease-out both;
+}
+
+/* Tone slider */
+.tone-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-border);
+  outline: none;
+  cursor: pointer;
+}
+
+.tone-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-border);
+}
+
+.tone-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  cursor: grab;
+  margin-top: -8px;
+  transition: box-shadow 0.15s ease;
+}
+
+.tone-slider::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
+.tone-slider:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+.tone-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-border);
+}
+
+.tone-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  cursor: grab;
+}
+
+.tone-slider::-moz-range-thumb:hover {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
+.tone-slider:active::-moz-range-thumb {
+  cursor: grabbing;
 }
