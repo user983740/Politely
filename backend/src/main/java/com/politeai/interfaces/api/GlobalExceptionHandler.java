@@ -1,5 +1,7 @@
 package com.politeai.interfaces.api;
 
+import com.politeai.application.transform.exception.TierRestrictionException;
+import com.politeai.infrastructure.ai.AiTransformException;
 import com.politeai.application.auth.exception.DuplicateEmailException;
 import com.politeai.application.auth.exception.DuplicateLoginIdException;
 import com.politeai.application.auth.exception.EmailNotVerifiedException;
@@ -64,6 +66,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleInvalidCredentials(InvalidCredentialsException e) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(new ErrorResponse("INVALID_CREDENTIALS", e.getMessage()));
+    }
+
+    @ExceptionHandler(TierRestrictionException.class)
+    public ResponseEntity<ErrorResponse> handleTierRestriction(TierRestrictionException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ErrorResponse("TIER_RESTRICTION", e.getMessage()));
+    }
+
+    @ExceptionHandler(AiTransformException.class)
+    public ResponseEntity<ErrorResponse> handleAiTransform(AiTransformException e) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse("AI_TRANSFORM_ERROR", e.getMessage()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

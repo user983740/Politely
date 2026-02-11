@@ -2,6 +2,8 @@ package com.politeai.domain.user.model;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -35,6 +37,10 @@ public class User {
     @Column(nullable = false)
     private String password;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    private UserTier tier;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -44,6 +50,7 @@ public class User {
         this.loginId = loginId;
         this.name = name;
         this.password = password;
+        this.tier = UserTier.FREE;
         this.createdAt = LocalDateTime.now();
     }
 }

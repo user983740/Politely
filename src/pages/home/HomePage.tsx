@@ -1,9 +1,11 @@
 import {useEffect} from 'react';
 import {Link} from 'react-router-dom';
 import {useAuthStore, useTransformStore} from '@/shared/store';
-import {PERSONAS, CONTEXTS, MAX_TEXT_LENGTH} from '@/shared/config/constants';
+import {PERSONAS, CONTEXTS} from '@/shared/config/constants';
 import type {Persona, Context, ToneLevel} from '@/shared/config/constants';
 import {ResultPanel} from '@/widgets/result-panel';
+import {transformText, getTierInfo} from '@/features/transform/api';
+import {ApiError} from '@/shared/api/client';
 
 const TONE_SLIDER_LEVELS: {key: ToneLevel; label: string}[] = [
   {key: 'NEUTRAL', label: '중립'},
@@ -63,14 +65,6 @@ const PERSONA_ICONS: Record<string, React.ReactNode> = {
   ),
 };
 
-const DUMMY_RESULT = `안녕하세요, 담당자님.
-
-해당 건 진행 상황이 어떻게 되고 있는지 여쭤봐도 될까요?
-가능하시다면 조금 더 빠른 처리를 부탁드려도 괜찮을지요.
-
-바쁘신 와중에 번거롭게 해드려 죄송합니다.
-감사합니다.`;
-
 export default function HomePage() {
   const {isLoggedIn, loginId, name} = useAuthStore();
   const {
@@ -79,16 +73,39 @@ export default function HomePage() {
     toneLevel,
     originalText,
     transformedText,
+    isTransforming,
+    transformError,
+    tierInfo,
     setPersona,
     toggleContext,
     setToneLevel,
     setOriginalText,
     setTransformedText,
+    setIsTransforming,
+    setTransformError,
+    setTierInfo,
   } = useTransformStore();
 
   useEffect(() => {
     if (!toneLevel) setToneLevel('POLITE');
   }, [toneLevel, setToneLevel]);
+
+  // Fetch tier info on mount and when login state changes
+  useEffect(() => {
+    getTierInfo()
+      .then(setTierInfo)
+      .catch(() => {
+        // Fallback to free tier defaults
+        setTierInfo({
+          tier: 'FREE',
+          maxTextLength: 300,
+          partialRewriteEnabled: false,
+          promptEnabled: false,
+        });
+      });
+  }, [isLoggedIn, setTierInfo]);
+
+  const maxTextLength = tierInfo?.maxTextLength ?? 300;
 
   const toneIndex = TONE_SLIDER_LEVELS.findIndex(
     (t) => t.key === (toneLevel ?? 'POLITE'),
@@ -98,14 +115,39 @@ export default function HomePage() {
     setToneLevel(TONE_SLIDER_LEVELS[index].key);
   };
 
-  const handleTransform = () => {
-    if (!originalText.trim()) return;
-    // TODO: replace with real API call
-    setTransformedText(DUMMY_RESULT);
+  const handleTransform = async () => {
+    if (!originalText.trim() || !persona || contexts.length === 0 || !toneLevel) return;
+
+    setIsTransforming(true);
+    setTransformError(null);
+
+    try {
+      const response = await transformText({
+        persona,
+        contexts,
+        toneLevel,
+        originalText,
+      });
+      setTransformedText(response.transformedText);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === 'TIER_RESTRICTION') {
+          setTransformError(err.message);
+        } else if (err.code === 'AI_TRANSFORM_ERROR') {
+          setTransformError('AI 변환 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+        } else {
+          setTransformError(err.message);
+        }
+      } else {
+        setTransformError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.');
+      }
+    } finally {
+      setIsTransforming(false);
+    }
   };
 
   const isAllSelected = !!persona && contexts.length > 0 && !!toneLevel;
-  const canTransform = isAllSelected && !!originalText.trim();
+  const canTransform = isAllSelected && !!originalText.trim() && !isTransforming;
   const hasResult = !!transformedText;
 
   return (
@@ -306,17 +348,24 @@ export default function HomePage() {
               }`}
             >
               {originalText.length.toLocaleString()} /{' '}
-              {MAX_TEXT_LENGTH.toLocaleString()}
+              {maxTextLength.toLocaleString()}
             </span>
           </div>
 
           <textarea
             placeholder="다듬고 싶은 텍스트를 입력하세요..."
-            maxLength={MAX_TEXT_LENGTH}
+            maxLength={maxTextLength}
             value={originalText}
             onChange={(e) => setOriginalText(e.target.value)}
             className="w-full min-h-[280px] sm:min-h-[360px] text-base text-text leading-relaxed placeholder:text-text-secondary/40 resize-none outline-none bg-transparent"
           />
+
+          {/* Error message */}
+          {transformError && (
+            <div className="mt-4 p-4 rounded-xl bg-error/5 border border-error/20 text-sm text-error animate-fade-in-up">
+              {transformError}
+            </div>
+          )}
 
           {/* Result area */}
           {hasResult && (
@@ -335,39 +384,62 @@ export default function HomePage() {
               }`}
             />
             <span className="hidden sm:inline">
-              {canTransform
-                ? '준비 완료. 변환 버튼을 눌러주세요.'
-                : !isAllSelected
-                  ? '왼쪽에서 받는 사람, 상황, 말투 강도를 선택하세요.'
-                  : '텍스트를 입력하면 변환할 수 있어요.'}
+              {isTransforming
+                ? '변환 중...'
+                : canTransform
+                  ? '준비 완료. 변환 버튼을 눌러주세요.'
+                  : !isAllSelected
+                    ? '왼쪽에서 받는 사람, 상황, 말투 강도를 선택하세요.'
+                    : '텍스트를 입력하면 변환할 수 있어요.'}
             </span>
             <span className="sm:hidden">
-              {canTransform
-                ? '준비 완료.'
-                : !isAllSelected
-                  ? '옵션을 모두 선택하세요.'
-                  : '텍스트를 입력하세요.'}
+              {isTransforming
+                ? '변환 중...'
+                : canTransform
+                  ? '준비 완료.'
+                  : !isAllSelected
+                    ? '옵션을 모두 선택하세요.'
+                    : '텍스트를 입력하세요.'}
             </span>
+            {tierInfo && (
+              <span className="text-xs text-text-secondary/60 ml-2 hidden sm:inline">
+                {tierInfo.tier === 'FREE'
+                  ? `프리티어 · 최대 ${tierInfo.maxTextLength}자`
+                  : `프리미엄 · 최대 ${tierInfo.maxTextLength.toLocaleString()}자`}
+              </span>
+            )}
           </div>
           <button
             onClick={handleTransform}
             disabled={!canTransform}
             className="px-5 sm:px-6 py-3 bg-text text-white text-sm font-semibold rounded-xl hover:bg-primary-light transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0 flex items-center gap-2"
           >
-            말투 다듬기
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="5" y1="12" x2="19" y2="12" />
-              <polyline points="12 5 19 12 12 19" />
-            </svg>
+            {isTransforming ? (
+              <>
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                변환 중...
+              </>
+            ) : (
+              <>
+                말투 다듬기
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                  <polyline points="12 5 19 12 12 19" />
+                </svg>
+              </>
+            )}
           </button>
         </div>
       </main>

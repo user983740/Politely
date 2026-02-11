@@ -3,11 +3,11 @@ import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
 
 export interface PartialRewriteRequest {
   selectedText: string;
-  optionalContext?: string;
+  fullContext?: string;
   persona: Persona;
-  context: Context[];
+  contexts: Context[];
   toneLevel: ToneLevel;
-  optionalUserPrompt?: string;
+  userPrompt?: string;
 }
 
 export interface PartialRewriteResponse {
