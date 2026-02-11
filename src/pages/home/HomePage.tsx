@@ -1,4 +1,4 @@
-import {useEffect} from 'react';
+import {useEffect, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {useAuthStore, useTransformStore} from '@/shared/store';
 import {PERSONAS, CONTEXTS} from '@/shared/config/constants';
@@ -86,6 +86,8 @@ export default function HomePage() {
     setTierInfo,
   } = useTransformStore();
 
+  const [settingsOpen, setSettingsOpen] = useState(true);
+
   useEffect(() => {
     if (!toneLevel) setToneLevel('POLITE');
   }, [toneLevel, setToneLevel]);
@@ -150,10 +152,197 @@ export default function HomePage() {
   const canTransform = isAllSelected && !!originalText.trim() && !isTransforming;
   const hasResult = !!transformedText;
 
+  // Summary labels for mobile collapsed view
+  const selectedPersonaLabel = persona ? PERSONAS.find(p => p.key === persona)?.label : null;
+  const selectedContextLabels = contexts.map(c => CONTEXTS.find(ctx => ctx.key === c)?.label).filter(Boolean);
+  const selectedToneLabel = TONE_SLIDER_LEVELS.find(t => t.key === toneLevel)?.label;
+
+  // Shared settings content (rendered in both mobile collapsible & desktop sidebar)
+  const renderSettings = () => (
+    <>
+      {/* Persona Section */}
+      <section className="mb-8 lg:mb-10">
+        <div className="flex items-center justify-between mb-4 lg:mb-5">
+          <h3 className="text-sm font-semibold text-text-secondary">
+            받는 사람 (PERSONA)
+          </h3>
+          <span className="text-xs text-error font-medium">*필수</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2.5 lg:gap-3">
+          {PERSONAS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() =>
+                setPersona(persona === p.key ? null : (p.key as Persona))
+              }
+              className={`flex items-center gap-2.5 lg:gap-3 px-3.5 lg:px-4 py-3 lg:py-3.5 rounded-xl border text-sm font-medium transition-all cursor-pointer ${
+                persona === p.key
+                  ? 'bg-accent-light border-accent/30 text-accent-deep'
+                  : 'border-border/60 bg-white text-text-secondary hover:border-accent/20 hover:bg-accent-light/30'
+              }`}
+            >
+              <span
+                className={
+                  persona === p.key
+                    ? 'text-accent-deep'
+                    : 'text-text-secondary/60'
+                }
+              >
+                {PERSONA_ICONS[p.key]}
+              </span>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Context Section */}
+      <section className="mb-8 lg:mb-10">
+        <h3 className="text-sm font-semibold text-text-secondary mb-4 lg:mb-5">
+          상황 (CONTEXT)
+        </h3>
+        <div className="flex flex-wrap gap-2.5 lg:gap-3">
+          {CONTEXTS.map((c) => (
+            <button
+              key={c.key}
+              onClick={() => toggleContext(c.key as Context)}
+              className={`px-3.5 lg:px-4 py-2 rounded-full text-sm font-medium border transition-all cursor-pointer ${
+                contexts.includes(c.key as Context)
+                  ? 'bg-accent text-white border-accent shadow-sm shadow-accent/20'
+                  : 'border-border/60 text-text-secondary bg-white hover:border-accent/30 hover:text-accent'
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Tone Slider */}
+      <section>
+        <h3 className="text-sm font-semibold text-text-secondary mb-4 lg:mb-6">
+          말투 강도
+        </h3>
+        <div className="px-2">
+          <input
+            type="range"
+            min={0}
+            max={TONE_SLIDER_LEVELS.length - 1}
+            step={1}
+            value={toneIndex >= 0 ? toneIndex : 1}
+            onChange={(e) => handleToneChange(Number(e.target.value))}
+            className="tone-slider w-full"
+          />
+          <div className="flex justify-between mt-2">
+            {TONE_SLIDER_LEVELS.map((t, i) => (
+              <span
+                key={t.key}
+                className={`text-xs transition-colors ${
+                  i === (toneIndex >= 0 ? toneIndex : 1)
+                    ? 'font-semibold text-text'
+                    : 'text-text-secondary'
+                }`}
+              >
+                {t.label}
+              </span>
+            ))}
+          </div>
+          <p className="text-xs text-accent mt-2">
+            *기본값: 공손 (자연스러운 비즈니스 톤)
+          </p>
+        </div>
+      </section>
+    </>
+  );
+
   return (
     <div className="h-screen flex flex-col lg:flex-row">
-      {/* Left Sidebar */}
-      <aside className="w-full lg:w-[440px] lg:min-w-[400px] bg-bg border-b lg:border-b-0 lg:border-r border-border flex flex-col shrink-0">
+      {/* ===== MOBILE HEADER (hidden on desktop) ===== */}
+      <header className="lg:hidden flex items-center justify-between px-4 py-3 border-b border-border bg-bg shrink-0">
+        <div className="flex items-center gap-2">
+          <img
+            src="/politely_logo.png"
+            alt="Politely"
+            className="w-7 h-7 rounded-lg"
+          />
+          <span className="text-base font-bold text-text">Politely</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {isLoggedIn ? (
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-full bg-white border border-border/60 flex items-center justify-center">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="text-text-secondary"
+                >
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+              </div>
+              <span className="text-sm font-medium text-text">
+                {name || loginId}
+              </span>
+            </div>
+          ) : (
+            <Link
+              to="/login"
+              className="px-3 py-1.5 text-xs font-semibold text-accent border border-accent/40 rounded-lg hover:bg-accent hover:text-white transition-colors"
+            >
+              로그인
+            </Link>
+          )}
+        </div>
+      </header>
+
+      {/* ===== MOBILE COLLAPSIBLE SETTINGS (hidden on desktop) ===== */}
+      <div className="lg:hidden shrink-0 border-b border-border bg-bg">
+        {/* Settings content when open */}
+        {settingsOpen && (
+          <div className="px-4 pt-4 pb-1 overflow-y-auto max-h-[60vh]">
+            {renderSettings()}
+          </div>
+        )}
+
+        {/* Collapsed: mini selection chips */}
+        {!settingsOpen && (persona || contexts.length > 0) && (
+          <div className="px-4 pt-3 pb-1 flex items-center gap-1.5 flex-wrap">
+            {persona && (
+              <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
+                {selectedPersonaLabel}
+              </span>
+            )}
+            {selectedContextLabels.map((label) => (
+              <span
+                key={label}
+                className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full"
+              >
+                {label}
+              </span>
+            ))}
+            {toneLevel && (
+              <span className="px-2.5 py-1 bg-accent/10 text-accent text-xs font-medium rounded-full">
+                {selectedToneLabel}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Grab handle */}
+        <button
+          onClick={() => setSettingsOpen(!settingsOpen)}
+          className="w-full flex justify-center py-2.5 cursor-pointer group"
+        >
+          <div className="w-10 h-1 rounded-full bg-border group-active:bg-text-secondary/50 transition-colors" />
+        </button>
+      </div>
+
+      {/* ===== DESKTOP SIDEBAR (hidden on mobile) ===== */}
+      <aside className="hidden lg:flex w-[440px] min-w-[400px] bg-bg border-r border-border flex-col shrink-0">
         {/* Logo */}
         <div className="px-8 py-6 flex items-center gap-2.5">
           <img
@@ -166,100 +355,7 @@ export default function HomePage() {
 
         {/* Scrollable settings area */}
         <div className="flex-1 overflow-y-auto px-8 pb-8">
-          {/* Persona Section */}
-          <section className="mb-10">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="text-sm font-semibold text-text-secondary">
-                받는 사람 (PERSONA)
-              </h3>
-              <span className="text-xs text-error font-medium">*필수</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              {PERSONAS.map((p) => (
-                <button
-                  key={p.key}
-                  onClick={() =>
-                    setPersona(
-                      persona === p.key ? null : (p.key as Persona),
-                    )
-                  }
-                  className={`flex items-center gap-3 px-4 py-3.5 rounded-xl border text-sm font-medium transition-all cursor-pointer ${
-                    persona === p.key
-                      ? 'bg-accent-light border-accent/30 text-accent-deep'
-                      : 'border-border/60 bg-white text-text-secondary hover:border-accent/20 hover:bg-accent-light/30'
-                  }`}
-                >
-                  <span
-                    className={
-                      persona === p.key
-                        ? 'text-accent-deep'
-                        : 'text-text-secondary/60'
-                    }
-                  >
-                    {PERSONA_ICONS[p.key]}
-                  </span>
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* Context Section */}
-          <section className="mb-10">
-            <h3 className="text-sm font-semibold text-text-secondary mb-5">
-              상황 (CONTEXT)
-            </h3>
-            <div className="flex flex-wrap gap-3">
-              {CONTEXTS.map((c) => (
-                <button
-                  key={c.key}
-                  onClick={() => toggleContext(c.key as Context)}
-                  className={`px-4 py-2 rounded-full text-sm font-medium border transition-all cursor-pointer ${
-                    contexts.includes(c.key as Context)
-                      ? 'bg-accent text-white border-accent shadow-sm shadow-accent/20'
-                      : 'border-border/60 text-text-secondary bg-white hover:border-accent/30 hover:text-accent'
-                  }`}
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* Tone Slider */}
-          <section>
-            <h3 className="text-sm font-semibold text-text-secondary mb-6">
-              말투 강도
-            </h3>
-            <div className="px-2">
-              <input
-                type="range"
-                min={0}
-                max={TONE_SLIDER_LEVELS.length - 1}
-                step={1}
-                value={toneIndex >= 0 ? toneIndex : 1}
-                onChange={(e) => handleToneChange(Number(e.target.value))}
-                className="tone-slider w-full"
-              />
-              <div className="flex justify-between mt-2">
-                {TONE_SLIDER_LEVELS.map((t, i) => (
-                  <span
-                    key={t.key}
-                    className={`text-xs transition-colors ${
-                      i === (toneIndex >= 0 ? toneIndex : 1)
-                        ? 'font-semibold text-text'
-                        : 'text-text-secondary'
-                    }`}
-                  >
-                    {t.label}
-                  </span>
-                ))}
-              </div>
-              <p className="text-xs text-accent mt-2">
-                *기본값: 공손하게 (비즈니스 표준)
-              </p>
-            </div>
-          </section>
+          {renderSettings()}
         </div>
 
         {/* User Info at bottom */}
@@ -299,10 +395,10 @@ export default function HomePage() {
         </div>
       </aside>
 
-      {/* Right Main Panel */}
+      {/* ===== MAIN PANEL ===== */}
       <main className="flex-1 flex flex-col min-h-0 bg-white">
-        {/* Top bar with help/settings icons */}
-        <div className="flex justify-end items-center px-10 py-5 gap-1">
+        {/* Top bar with help/settings icons (desktop only) */}
+        <div className="hidden lg:flex justify-end items-center px-10 py-5 gap-1">
           <button className="p-2 rounded-lg hover:bg-surface text-text-secondary/50 hover:text-text-secondary transition-colors cursor-pointer">
             <svg
               width="18"
@@ -337,9 +433,9 @@ export default function HomePage() {
         </div>
 
         {/* Text input area */}
-        <div className="flex-1 overflow-y-auto px-10 sm:px-14 pb-10">
-          <div className="flex items-baseline justify-between mb-8">
-            <h1 className="text-xl sm:text-2xl font-bold text-text">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-10 lg:px-14 pb-6 sm:pb-10 pt-5 lg:pt-0">
+          <div className="flex items-baseline justify-between mb-5 lg:mb-8">
+            <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-text">
               원문 입력
             </h1>
             <span
@@ -357,7 +453,7 @@ export default function HomePage() {
             maxLength={maxTextLength}
             value={originalText}
             onChange={(e) => setOriginalText(e.target.value)}
-            className="w-full min-h-[280px] sm:min-h-[360px] text-base text-text leading-relaxed placeholder:text-text-secondary/40 resize-none outline-none bg-transparent"
+            className="w-full min-h-[220px] sm:min-h-[280px] lg:min-h-[360px] text-base text-text leading-relaxed placeholder:text-text-secondary/40 resize-none outline-none bg-transparent"
           />
 
           {/* Error message */}
@@ -376,33 +472,33 @@ export default function HomePage() {
         </div>
 
         {/* Bottom bar with status + transform button */}
-        <div className="border-t border-border px-10 sm:px-14 py-6 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-sm text-text-secondary">
+        <div className="border-t border-border px-4 sm:px-10 lg:px-14 py-4 sm:py-6 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm text-text-secondary min-w-0">
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
                 canTransform ? 'bg-success' : 'bg-border'
               }`}
             />
-            <span className="hidden sm:inline">
+            <span className="hidden sm:inline truncate">
               {isTransforming
                 ? '변환 중...'
                 : canTransform
                   ? '준비 완료. 변환 버튼을 눌러주세요.'
                   : !isAllSelected
-                    ? '왼쪽에서 받는 사람, 상황, 말투 강도를 선택하세요.'
+                    ? '받는 사람, 상황, 말투 강도를 선택하세요.'
                     : '텍스트를 입력하면 변환할 수 있어요.'}
             </span>
-            <span className="sm:hidden">
+            <span className="sm:hidden truncate">
               {isTransforming
                 ? '변환 중...'
                 : canTransform
-                  ? '준비 완료.'
+                  ? '준비 완료'
                   : !isAllSelected
-                    ? '옵션을 모두 선택하세요.'
-                    : '텍스트를 입력하세요.'}
+                    ? '옵션을 선택하세요'
+                    : '텍스트를 입력하세요'}
             </span>
             {tierInfo && (
-              <span className="text-xs text-text-secondary/60 ml-2 hidden sm:inline">
+              <span className="text-xs text-text-secondary/60 ml-2 hidden sm:inline shrink-0">
                 {tierInfo.tier === 'FREE'
                   ? `프리티어 · 최대 ${tierInfo.maxTextLength}자`
                   : `프리미엄 · 최대 ${tierInfo.maxTextLength.toLocaleString()}자`}

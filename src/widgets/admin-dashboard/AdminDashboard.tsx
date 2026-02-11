@@ -31,10 +31,9 @@ const CONTEXT_DISTRIBUTION = [
 ];
 
 const TONE_DISTRIBUTION = [
-  { label: '매우 공손', percent: 40 },
-  { label: '공손', percent: 35 },
-  { label: '중립', percent: 18 },
-  { label: '단호하지만 예의있게', percent: 7 },
+  { label: '중립', percent: 20 },
+  { label: '공손', percent: 45 },
+  { label: '매우 공손', percent: 35 },
 ];
 
 const RETENTION = [

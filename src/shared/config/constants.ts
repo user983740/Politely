@@ -19,10 +19,9 @@ export const CONTEXTS = [
 ] as const;
 
 export const TONE_LEVELS = [
-  { key: 'VERY_POLITE', label: '매우 공손' },
-  { key: 'POLITE', label: '공손' },
   { key: 'NEUTRAL', label: '중립' },
-  { key: 'FIRM_BUT_RESPECTFUL', label: '단호하지만 예의있게' },
+  { key: 'POLITE', label: '공손' },
+  { key: 'VERY_POLITE', label: '매우 공손' },
 ] as const;
 
 export const MAX_TEXT_LENGTH = 1000;
