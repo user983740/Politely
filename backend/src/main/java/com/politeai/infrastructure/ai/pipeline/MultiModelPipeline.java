@@ -1,7 +1,5 @@
 package com.politeai.infrastructure.ai.pipeline;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.politeai.domain.transform.model.*;
 import com.politeai.infrastructure.ai.AiTransformService;
 import com.politeai.infrastructure.ai.LlmCallResult;
@@ -9,7 +7,6 @@ import com.politeai.infrastructure.ai.preprocessing.LockedSpanExtractor;
 import com.politeai.infrastructure.ai.preprocessing.LockedSpanMasker;
 import com.politeai.infrastructure.ai.preprocessing.TextNormalizer;
 import com.politeai.infrastructure.ai.validation.OutputValidator;
-import com.openai.models.ResponseFormatJsonObject;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -23,7 +20,7 @@ import java.util.concurrent.CompletableFuture;
  * Multi-model pipeline orchestrator.
  *
  * Pipeline:
- *   preprocess → 3 intermediate models (parallel, 4o-mini) → semantic span merge → Final model (parameterized) → unmask → validate
+ *   preprocess → 4 intermediate models (parallel, 4o-mini) → semantic span merge → Final model (parameterized) → unmask → validate
  *
  * The intermediate analysis is shared; only the Final model differs between A/B tests.
  */
@@ -38,12 +35,11 @@ public class MultiModelPipeline {
     private final OutputValidator outputValidator;
     private final MultiModelPromptBuilder multiPromptBuilder;
     private final AiTransformService aiTransformService;
-    private final ObjectMapper objectMapper;
 
     private static final String ANALYSIS_MODEL = "gpt-4o-mini";
-    private static final int ANALYSIS_MAX_TOKENS = 300;
+    private static final int ANALYSIS_MAX_TOKENS = 400;
+    private static final int DECONSTRUCTION_MAX_TOKENS = 600;
     private static final double ANALYSIS_TEMP = 0.3;
-    private static final ResponseFormatJsonObject JSON_FORMAT = ResponseFormatJsonObject.builder().build();
 
     /**
      * Result of the multi-model pipeline execution, including token usage.
@@ -58,12 +54,12 @@ public class MultiModelPipeline {
     ) {}
 
     /**
-     * Result of only the shared analysis phase (3 intermediate models).
+     * Result of the shared analysis phase (3 intermediate models: situation+intent, locked expressions, deconstruction).
      */
     public record SharedAnalysisResult(
             String model1Output,
             String model2Output,
-            String model3Output,
+            String model4Output,
             long totalPromptTokens,
             long totalCompletionTokens,
             String maskedText,
@@ -99,37 +95,37 @@ public class MultiModelPipeline {
             log.info("[MultiModel] Extracted {} regex locked spans", regexSpans.size());
         }
 
-        // 2. Build intermediate prompts
+        // 2. Build intermediate prompts (3 models: situation+intent, locked expressions, deconstruction)
         String m1System = multiPromptBuilder.buildModel1SystemPrompt();
         String m1User = multiPromptBuilder.buildModel1UserMessage(persona, contexts, toneLevel, masked, userPrompt, senderInfo);
 
         String m2System = multiPromptBuilder.buildModel2SystemPrompt();
         String m2User = multiPromptBuilder.buildModel2UserMessage(persona, masked);
 
-        String m3System = multiPromptBuilder.buildModel3SystemPrompt();
-        String m3User = multiPromptBuilder.buildModel3UserMessage(persona, contexts, toneLevel, masked, userPrompt, senderInfo);
+        String m4System = multiPromptBuilder.buildModel4SystemPrompt();
+        String m4User = multiPromptBuilder.buildModel4UserMessage(masked);
 
         // 3. Run 3 intermediate models in parallel
         CompletableFuture<LlmCallResult> f1 = CompletableFuture.supplyAsync(() ->
                 aiTransformService.callOpenAIWithModel(ANALYSIS_MODEL, m1System, m1User,
-                        ANALYSIS_TEMP, ANALYSIS_MAX_TOKENS, JSON_FORMAT));
+                        ANALYSIS_TEMP, ANALYSIS_MAX_TOKENS, null));
 
         CompletableFuture<LlmCallResult> f2 = CompletableFuture.supplyAsync(() ->
                 aiTransformService.callOpenAIWithModel(ANALYSIS_MODEL, m2System, m2User,
-                        ANALYSIS_TEMP, ANALYSIS_MAX_TOKENS, JSON_FORMAT));
+                        ANALYSIS_TEMP, ANALYSIS_MAX_TOKENS, null));
 
-        CompletableFuture<LlmCallResult> f3 = CompletableFuture.supplyAsync(() ->
-                aiTransformService.callOpenAIWithModel(ANALYSIS_MODEL, m3System, m3User,
-                        ANALYSIS_TEMP, ANALYSIS_MAX_TOKENS, JSON_FORMAT));
+        CompletableFuture<LlmCallResult> f4 = CompletableFuture.supplyAsync(() ->
+                aiTransformService.callOpenAIWithModel(ANALYSIS_MODEL, m4System, m4User,
+                        ANALYSIS_TEMP, DECONSTRUCTION_MAX_TOKENS, null));
 
-        CompletableFuture.allOf(f1, f2, f3).join();
+        CompletableFuture.allOf(f1, f2, f4).join();
 
-        LlmCallResult r1 = safeGet(f1, "Model1");
-        LlmCallResult r2 = safeGet(f2, "Model2");
-        LlmCallResult r3 = safeGet(f3, "Model3");
+        LlmCallResult r1 = safeGet(f1, "Model1-SituationIntent");
+        LlmCallResult r2 = safeGet(f2, "Model2-LockedExpr");
+        LlmCallResult r4 = safeGet(f4, "Model3-Deconstruction");
 
-        long totalPrompt = r1.promptTokens() + r2.promptTokens() + r3.promptTokens();
-        long totalCompletion = r1.completionTokens() + r2.completionTokens() + r3.completionTokens();
+        long totalPrompt = r1.promptTokens() + r2.promptTokens() + r4.promptTokens();
+        long totalCompletion = r1.completionTokens() + r2.completionTokens() + r4.completionTokens();
 
         // 4. Merge semantic spans from Model 2
         MergedSpanResult mergeResult = mergeSemanticSpans(normalized, regexSpans, r2.content());
@@ -140,7 +136,7 @@ public class MultiModelPipeline {
                 totalPrompt, totalCompletion, regexSpans.size(), allSpans.size());
 
         return new SharedAnalysisResult(
-                r1.content(), r2.content(), r3.content(),
+                r1.content(), r2.content(), r4.content(),
                 totalPrompt, totalCompletion,
                 finalMasked, allSpans
         );
@@ -152,13 +148,12 @@ public class MultiModelPipeline {
      */
     public FinalPromptPair buildFinalPrompt(SharedAnalysisResult analysis,
                                              Persona persona, List<SituationContext> contexts,
-                                             ToneLevel toneLevel, String userPrompt, String senderInfo) {
+                                             ToneLevel toneLevel, String senderInfo) {
         String finalSystem = multiPromptBuilder.buildFinalSystemPrompt(persona, contexts, toneLevel);
         String finalUser = multiPromptBuilder.buildFinalUserMessage(
-                persona, contexts, toneLevel, analysis.maskedText(),
-                userPrompt, senderInfo,
-                analysis.model1Output(), analysis.model2Output(), analysis.model3Output(),
-                analysis.lockedSpans());
+                persona, contexts, toneLevel, senderInfo,
+                analysis.model1Output(), analysis.model2Output(),
+                analysis.model4Output(), analysis.lockedSpans());
 
         return new FinalPromptPair(finalSystem, finalUser, analysis.lockedSpans());
     }
@@ -172,10 +167,9 @@ public class MultiModelPipeline {
                                                   List<SituationContext> contexts,
                                                   ToneLevel toneLevel,
                                                   String originalText,
-                                                  String userPrompt,
                                                   String senderInfo) {
         // Build Final prompt with intermediate analysis injected
-        FinalPromptPair prompt = buildFinalPrompt(analysis, persona, contexts, toneLevel, userPrompt, senderInfo);
+        FinalPromptPair prompt = buildFinalPrompt(analysis, persona, contexts, toneLevel, senderInfo);
 
         // Call Final model (plain text, no JSON format)
         LlmCallResult finalResult = aiTransformService.callOpenAIWithModel(
@@ -238,24 +232,25 @@ public class MultiModelPipeline {
     }
 
     /**
-     * Parse Model 2 JSON output and find non-overlapping semantic spans in the text.
+     * Parse Model 2 line-based output ("- expression" per line) and find non-overlapping semantic spans in the text.
      */
     private List<LockedSpan> parseSemanticSpans(String normalizedText,
                                                   List<LockedSpan> regexSpans,
                                                   String model2Output) {
         List<LockedSpan> result = new ArrayList<>();
-        try {
-            JsonNode root = objectMapper.readTree(model2Output);
-            JsonNode expressions = root.get("lockedExpressions");
-            if (expressions == null || !expressions.isArray() || expressions.isEmpty()) {
-                return result;
-            }
+        if (model2Output == null || model2Output.isBlank() || model2Output.trim().equals("없음")) {
+            return result;
+        }
 
+        try {
             int nextIndex = regexSpans.size(); // Start indexing after regex spans
 
-            for (JsonNode expr : expressions) {
-                String text = expr.has("text") ? expr.get("text").asText() : null;
-                if (text == null || text.isBlank()) continue;
+            for (String line : model2Output.split("\n")) {
+                line = line.trim();
+                if (!line.startsWith("- ")) continue;
+
+                String text = line.substring(2).trim();
+                if (text.isBlank()) continue;
 
                 // Find position in normalized text
                 int pos = normalizedText.indexOf(text);
@@ -295,7 +290,7 @@ public class MultiModelPipeline {
             return future.join();
         } catch (Exception e) {
             log.warn("[MultiModel] {} failed, using empty fallback: {}", label, e.getMessage());
-            return new LlmCallResult("{}", null, 0, 0);
+            return new LlmCallResult("", null, 0, 0);
         }
     }
 }

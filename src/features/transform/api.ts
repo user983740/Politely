@@ -14,5 +14,5 @@ export function getTierInfo(): Promise<TierInfo> {
 export interface IntermediateAnalysis {
   model1Output: string;
   model2Output: string;
-  model3Output: string;
+  model4Output: string;
 }

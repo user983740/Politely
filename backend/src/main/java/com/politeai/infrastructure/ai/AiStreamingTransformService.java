@@ -67,7 +67,7 @@ public class AiStreamingTransformService {
                 Map<String, String> intermediateData = new LinkedHashMap<>();
                 intermediateData.put("model1", analysis.model1Output());
                 intermediateData.put("model2", analysis.model2Output());
-                intermediateData.put("model3", analysis.model3Output());
+                intermediateData.put("model4", analysis.model4Output());
                 emitter.send(SseEmitter.event()
                         .name("intermediate")
                         .data(objectMapper.writeValueAsString(intermediateData)));
@@ -82,7 +82,7 @@ public class AiStreamingTransformService {
 
                 // 4. Build final prompt
                 FinalPromptPair prompt = multiModelPipeline.buildFinalPrompt(
-                        analysis, persona, contexts, toneLevel, userPrompt, senderInfo);
+                        analysis, persona, contexts, toneLevel, senderInfo);
 
                 // 5. Stream final model (streams deltas, returns unmasked text + token usage)
                 FinalStreamResult finalResult = streamFinalModel(model, prompt.systemPrompt(), prompt.userMessage(),

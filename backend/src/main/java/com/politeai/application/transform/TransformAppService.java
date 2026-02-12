@@ -47,7 +47,7 @@ public class TransformAppService {
                 persona, contexts, toneLevel, originalText, userPrompt, senderInfo);
 
         MultiModelPipelineResult result = multiModelPipeline.executeFinal(
-                model, analysis, persona, contexts, toneLevel, originalText, userPrompt, senderInfo);
+                model, analysis, persona, contexts, toneLevel, originalText, senderInfo);
 
         return new TransformResult(result.transformedText(), null);
     }
