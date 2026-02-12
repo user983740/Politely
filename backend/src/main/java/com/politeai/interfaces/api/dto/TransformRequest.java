@@ -24,6 +24,11 @@ public record TransformRequest(
         @Size(max = 1000, message = "Original text must not exceed 1000 characters")
         String originalText,
 
-        @Size(max = 80, message = "User prompt must not exceed 80 characters")
-        String userPrompt
+        @Size(max = 500, message = "User prompt must not exceed 500 characters")
+        String userPrompt,
+
+        @Size(max = 100, message = "Sender info must not exceed 100 characters")
+        String senderInfo,
+
+        String tierOverride
 ) {}

@@ -3,8 +3,8 @@ export const PERSONAS = [
   { key: 'CLIENT', label: '고객' },
   { key: 'PARENT', label: '학부모' },
   { key: 'PROFESSOR', label: '교수' },
-  { key: 'COLLEAGUE', label: '동료' },
   { key: 'OFFICIAL', label: '공식 기관' },
+  { key: 'OTHER', label: '기타' },
 ] as const;
 
 export const CONTEXTS = [
@@ -25,7 +25,8 @@ export const TONE_LEVELS = [
 ] as const;
 
 export const MAX_TEXT_LENGTH = 1000;
-export const MAX_PROMPT_LENGTH = 80;
+export const MAX_PROMPT_LENGTH = 500;
+export const MAX_SENDER_INFO_LENGTH = 100;
 export const API_BASE_URL = '/api';
 
 export type Persona = (typeof PERSONAS)[number]['key'];

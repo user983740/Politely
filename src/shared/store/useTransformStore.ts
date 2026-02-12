@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
-import type { TierInfo } from '@/features/transform/api';
+import type { TierInfo, ABTestResponse } from '@/features/transform/api';
 
 interface TransformState {
   persona: Persona | null;
@@ -8,19 +8,28 @@ interface TransformState {
   toneLevel: ToneLevel | null;
   originalText: string;
   userPrompt: string;
+  senderInfo: string;
   transformedText: string;
+  analysisContext: string | null;
   isTransforming: boolean;
   transformError: string | null;
   tierInfo: TierInfo | null;
+  isABTestMode: boolean;
+  abTestResult: ABTestResponse | null;
   setPersona: (persona: Persona | null) => void;
   toggleContext: (context: Context) => void;
   setToneLevel: (toneLevel: ToneLevel | null) => void;
   setOriginalText: (text: string) => void;
   setUserPrompt: (prompt: string) => void;
+  setSenderInfo: (info: string) => void;
   setTransformedText: (text: string) => void;
+  appendTransformedText: (chunk: string) => void;
+  setAnalysisContext: (ctx: string | null) => void;
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
   setTierInfo: (info: TierInfo) => void;
+  setIsABTestMode: (v: boolean) => void;
+  setABTestResult: (result: ABTestResponse | null) => void;
   resetForNewInput: () => void;
   reset: () => void;
 }
@@ -31,10 +40,14 @@ const initialState = {
   toneLevel: null as ToneLevel | null,
   originalText: '',
   userPrompt: '',
+  senderInfo: '',
   transformedText: '',
+  analysisContext: null as string | null,
   isTransforming: false,
   transformError: null as string | null,
   tierInfo: null as TierInfo | null,
+  isABTestMode: false,
+  abTestResult: null as ABTestResponse | null,
 };
 
 export const useTransformStore = create<TransformState>((set) => ({
@@ -49,11 +62,17 @@ export const useTransformStore = create<TransformState>((set) => ({
   setToneLevel: (toneLevel) => set({ toneLevel }),
   setOriginalText: (originalText) => set({ originalText }),
   setUserPrompt: (userPrompt) => set({ userPrompt }),
+  setSenderInfo: (senderInfo) => set({ senderInfo }),
   setTransformedText: (transformedText) => set({ transformedText }),
+  appendTransformedText: (chunk) =>
+    set((state) => ({ transformedText: state.transformedText + chunk })),
+  setAnalysisContext: (analysisContext) => set({ analysisContext }),
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
   setTierInfo: (tierInfo) => set({ tierInfo }),
+  setIsABTestMode: (isABTestMode) => set({ isABTestMode }),
+  setABTestResult: (abTestResult) => set({ abTestResult }),
   resetForNewInput: () =>
-    set({ originalText: '', userPrompt: '', transformedText: '', transformError: null }),
+    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, transformError: null, abTestResult: null }),
   reset: () => set(initialState),
 }));

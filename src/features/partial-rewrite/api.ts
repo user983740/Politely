@@ -8,6 +8,9 @@ export interface PartialRewriteRequest {
   contexts: Context[];
   toneLevel: ToneLevel;
   userPrompt?: string;
+  senderInfo?: string;
+  tierOverride?: string;
+  analysisContext?: string | null;
 }
 
 export interface PartialRewriteResponse {

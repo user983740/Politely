@@ -1,10 +1,13 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {useAuthStore, useTransformStore} from '@/shared/store';
-import {PERSONAS, CONTEXTS, MAX_PROMPT_LENGTH} from '@/shared/config/constants';
+import {PERSONAS, CONTEXTS, MAX_PROMPT_LENGTH, MAX_SENDER_INFO_LENGTH} from '@/shared/config/constants';
 import type {Persona, Context, ToneLevel} from '@/shared/config/constants';
 import {ResultPanel} from '@/widgets/result-panel';
-import {transformText, getTierInfo} from '@/features/transform/api';
+import {ABTestResultPanel} from '@/widgets/ab-test-result';
+import {getTierInfo, abTestTransform} from '@/features/transform/api';
+import {streamTransform} from '@/features/transform/stream-api';
+import type {LockedSpanInfo} from '@/features/transform/stream-api';
 import {ApiError} from '@/shared/api/client';
 
 const TONE_SLIDER_LEVELS: {key: ToneLevel; label: string}[] = [
@@ -55,12 +58,11 @@ const PERSONA_ICONS: Record<string, React.ReactNode> = {
       <line x1="12" y1="14" x2="12.01" y2="14" />
     </svg>
   ),
-  COLLEAGUE: (
+  OTHER: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-      <circle cx="9" cy="7" r="4" />
-      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      <circle cx="5" cy="12" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="19" cy="12" r="2" />
     </svg>
   ),
 };
@@ -73,6 +75,7 @@ export default function HomePage() {
     toneLevel,
     originalText,
     userPrompt,
+    senderInfo,
     transformedText,
     isTransforming,
     transformError,
@@ -82,15 +85,24 @@ export default function HomePage() {
     setToneLevel,
     setOriginalText,
     setUserPrompt,
+    setSenderInfo,
     setTransformedText,
+    setAnalysisContext,
     setIsTransforming,
     setTransformError,
     setTierInfo,
+    isABTestMode,
+    setIsABTestMode,
+    abTestResult,
+    setABTestResult,
     resetForNewInput,
   } = useTransformStore();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isPaidOverride, setIsPaidOverride] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const rawStreamRef = useRef('');
+  const spansRef = useRef<LockedSpanInfo[]>([]);
 
   const handleTierToggle = () => {
     const next = !isPaidOverride;
@@ -134,28 +146,107 @@ export default function HomePage() {
   const handleTransform = async () => {
     if (!originalText.trim() || !persona || contexts.length === 0 || !toneLevel) return;
 
+    // Cancel any in-progress stream
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsTransforming(true);
     setTransformError(null);
+    setTransformedText('');
+    setAnalysisContext(null);
+    rawStreamRef.current = '';
+    spansRef.current = [];
 
     try {
-      const response = await transformText({
+      await streamTransform(
+        {
+          persona,
+          contexts,
+          toneLevel,
+          originalText,
+          ...(tierInfo?.promptEnabled && userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
+          ...(senderInfo.trim() ? {senderInfo: senderInfo.trim()} : {}),
+          tierOverride: tierInfo?.tier,
+        },
+        {
+          onSpans: (spans) => {
+            spansRef.current = spans;
+          },
+          onDelta: (chunk) => {
+            rawStreamRef.current += chunk;
+            if (spansRef.current.length > 0) {
+              let text = rawStreamRef.current;
+              for (const span of spansRef.current) {
+                text = text.replaceAll(span.placeholder, span.original);
+              }
+              setTransformedText(text);
+            } else {
+              setTransformedText(rawStreamRef.current);
+            }
+          },
+          onAnalysis: (analysis) => setAnalysisContext(analysis),
+          onDone: (fullText) => setTransformedText(fullText),
+          onError: (message) => setTransformError(message),
+        },
+        controller.signal,
+      );
+    } catch (err) {
+      if (controller.signal.aborted) return; // User cancelled
+
+      const apiErr = err instanceof ApiError ? err
+        : (err && typeof err === 'object' && 'code' in err && 'status' in err)
+          ? err as ApiError
+          : null;
+
+      if (apiErr) {
+        if (apiErr.code === 'TIER_RESTRICTION') {
+          setTransformError(apiErr.message);
+        } else if (apiErr.code === 'AI_TRANSFORM_ERROR') {
+          setTransformError('AI 변환 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+        } else {
+          setTransformError(apiErr.message);
+        }
+      } else {
+        console.error('Transform error:', err);
+        setTransformError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.');
+      }
+    } finally {
+      setIsTransforming(false);
+      abortRef.current = null;
+    }
+  };
+
+  const handleABTest = async () => {
+    if (!originalText.trim() || !persona || contexts.length === 0 || !toneLevel) return;
+
+    setIsTransforming(true);
+    setTransformError(null);
+    setTransformedText('');
+    setAnalysisContext(null);
+    setABTestResult(null);
+
+    try {
+      const result = await abTestTransform({
         persona,
         contexts,
         toneLevel,
         originalText,
         ...(tierInfo?.promptEnabled && userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
+        ...(senderInfo.trim() ? {senderInfo: senderInfo.trim()} : {}),
+        tierOverride: tierInfo?.tier,
       });
-      setTransformedText(response.transformedText);
+      setABTestResult(result);
     } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.code === 'TIER_RESTRICTION') {
-          setTransformError(err.message);
-        } else if (err.code === 'AI_TRANSFORM_ERROR') {
-          setTransformError('AI 변환 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
-        } else {
-          setTransformError(err.message);
-        }
+      const apiErr = err instanceof ApiError ? err
+        : (err && typeof err === 'object' && 'code' in err && 'status' in err)
+          ? err as ApiError
+          : null;
+
+      if (apiErr) {
+        setTransformError(apiErr.message);
       } else {
+        console.error('A/B test error:', err);
         setTransformError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.');
       }
     } finally {
@@ -163,9 +254,22 @@ export default function HomePage() {
     }
   };
 
+  const SENDER_INFO_PLACEHOLDERS: Record<string, string> = {
+    BOSS: '예: 마케팅팀 김민수 대리',
+    CLIENT: '예: (주)ABC 영업부 이지연 과장',
+    PROFESSOR: '예: 경영학과 20221234 홍길동',
+    PARENT: '예: 3학년 2반 담임 김민수',
+    OFFICIAL: '예: (주)ABC 김민수',
+    OTHER: '예: OO팀 김민수',
+  };
+
+  const senderInfoPlaceholder = persona
+    ? SENDER_INFO_PLACEHOLDERS[persona] ?? '예: OO팀 OOO'
+    : '예: OO팀 OOO';
+
   const isAllSelected = !!persona && contexts.length > 0 && !!toneLevel;
   const canTransform = isAllSelected && !!originalText.trim() && !isTransforming;
-  const hasResult = !!transformedText;
+  const hasResult = !!transformedText || !!abTestResult || isTransforming;
 
   // Summary labels for mobile collapsed view
   const selectedPersonaLabel = persona ? PERSONAS.find(p => p.key === persona)?.label : null;
@@ -298,8 +402,12 @@ export default function HomePage() {
 
         {/* Result content centered */}
         <div className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
-          <div className="max-w-2xl mx-auto">
-            <ResultPanel />
+          <div className={`mx-auto ${abTestResult ? 'max-w-5xl' : 'max-w-2xl'}`}>
+            {abTestResult ? (
+              <ABTestResultPanel result={abTestResult} />
+            ) : (
+              <ResultPanel />
+            )}
 
             {/* Selection summary chips */}
             <div className="mt-6 pt-5 border-t border-border/60">
@@ -345,6 +453,17 @@ export default function HomePage() {
           <span className="text-base font-bold text-text">Politely</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* A/B toggle (mobile) */}
+          <button
+            onClick={() => setIsABTestMode(!isABTestMode)}
+            className={`px-2 py-1 rounded-full border text-xs font-semibold cursor-pointer transition-colors ${
+              isABTestMode
+                ? 'bg-amber-500 text-white border-amber-500'
+                : 'border-border/60 text-text-secondary hover:border-amber-400 hover:text-amber-600'
+            }`}
+          >
+            A/B
+          </button>
           {/* Tier toggle (mobile) */}
           <button
             onClick={handleTierToggle}
@@ -488,17 +607,29 @@ export default function HomePage() {
               </Link>
             )}
           </div>
-          {/* Tier toggle (desktop) */}
-          <button
-            onClick={handleTierToggle}
-            className="mt-3 flex items-center gap-2 cursor-pointer group"
-          >
-            <span className={`text-xs transition-colors ${isPaidOverride ? 'text-text-secondary' : 'font-semibold text-text'}`}>Free</span>
-            <div className={`relative w-8 h-[18px] rounded-full transition-colors ${isPaidOverride ? 'bg-accent' : 'bg-border'}`}>
-              <div className={`absolute top-[3px] w-3 h-3 rounded-full bg-white shadow transition-transform ${isPaidOverride ? 'translate-x-[14px]' : 'translate-x-[3px]'}`} />
-            </div>
-            <span className={`text-xs transition-colors ${isPaidOverride ? 'font-semibold text-accent' : 'text-text-secondary'}`}>Premium</span>
-          </button>
+          {/* Tier toggle + A/B toggle (desktop) */}
+          <div className="mt-3 flex items-center gap-4">
+            <button
+              onClick={handleTierToggle}
+              className="flex items-center gap-2 cursor-pointer group"
+            >
+              <span className={`text-xs transition-colors ${isPaidOverride ? 'text-text-secondary' : 'font-semibold text-text'}`}>Free</span>
+              <div className={`relative w-8 h-[18px] rounded-full transition-colors ${isPaidOverride ? 'bg-accent' : 'bg-border'}`}>
+                <div className={`absolute top-[3px] w-3 h-3 rounded-full bg-white shadow transition-transform ${isPaidOverride ? 'translate-x-[14px]' : 'translate-x-[3px]'}`} />
+              </div>
+              <span className={`text-xs transition-colors ${isPaidOverride ? 'font-semibold text-accent' : 'text-text-secondary'}`}>Premium</span>
+            </button>
+            <button
+              onClick={() => setIsABTestMode(!isABTestMode)}
+              className={`px-2.5 py-1 rounded-full border text-xs font-semibold cursor-pointer transition-colors ${
+                isABTestMode
+                  ? 'bg-amber-500 text-white border-amber-500'
+                  : 'border-border/60 text-text-secondary hover:border-amber-400 hover:text-amber-600'
+              }`}
+            >
+              A/B
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -541,7 +672,25 @@ export default function HomePage() {
 
         {/* Text input area */}
         <div className="flex-1 flex flex-col overflow-y-auto px-4 sm:px-10 lg:px-14 pb-2 sm:pb-10 pt-5 lg:pt-0">
-          <div className="flex items-baseline justify-between mb-3 sm:mb-5 lg:mb-8">
+          {/* Sender Info */}
+          <div className="mb-3 sm:mb-4 shrink-0">
+            <div className="flex items-center justify-between mb-1 sm:mb-1.5">
+              <label className="text-xs sm:text-sm font-medium text-text-secondary">보내는 사람</label>
+              <span className={`text-xs tabular-nums ${senderInfo.length > 0 ? 'text-accent' : 'text-text-secondary/50'}`}>
+                {senderInfo.length} / {MAX_SENDER_INFO_LENGTH}
+              </span>
+            </div>
+            <input
+              type="text"
+              placeholder={senderInfoPlaceholder}
+              maxLength={MAX_SENDER_INFO_LENGTH}
+              value={senderInfo}
+              onChange={(e) => setSenderInfo(e.target.value)}
+              className="w-full px-3 sm:px-4 py-2 sm:py-2.5 text-sm text-text bg-surface border border-border/60 rounded-xl placeholder:text-text-secondary/40 outline-none focus:border-accent/40 transition-colors"
+            />
+          </div>
+
+          <div className="flex items-baseline justify-between mb-3 sm:mb-5 lg:mb-4">
             <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-text">
               원문 입력
             </h1>
@@ -626,9 +775,13 @@ export default function HomePage() {
             )}
           </div>
           <button
-            onClick={handleTransform}
+            onClick={isABTestMode ? handleABTest : handleTransform}
             disabled={!canTransform}
-            className="px-5 sm:px-6 py-3 bg-text text-white text-sm font-semibold rounded-xl hover:bg-primary-light transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0 flex items-center gap-2"
+            className={`px-5 sm:px-6 py-3 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0 flex items-center gap-2 ${
+              isABTestMode
+                ? 'bg-amber-500 hover:bg-amber-600'
+                : 'bg-text hover:bg-primary-light'
+            }`}
           >
             {isTransforming ? (
               <>
@@ -636,11 +789,11 @@ export default function HomePage() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                변환 중...
+                {isABTestMode ? 'A/B 비교 중...' : '변환 중...'}
               </>
             ) : (
               <>
-                말투 다듬기
+                {isABTestMode ? 'A/B 비교' : '말투 다듬기'}
                 <svg
                   width="16"
                   height="16"

@@ -8,4 +8,5 @@ import lombok.Value;
 @Value
 public class TransformResult {
     String transformedText;
+    String analysisContext;
 }

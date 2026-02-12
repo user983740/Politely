@@ -4,6 +4,7 @@ import com.politeai.domain.transform.model.Persona;
 import com.politeai.domain.transform.model.SituationContext;
 import com.politeai.domain.transform.model.ToneLevel;
 import com.politeai.domain.transform.model.TransformResult;
+import com.politeai.domain.user.model.UserTier;
 
 import java.util.List;
 
@@ -20,14 +21,17 @@ public interface TransformService {
      * @param contexts       one or more situation contexts
      * @param toneLevel      desired politeness level
      * @param originalText   the original Korean text (max 1000 chars)
-     * @param userPrompt     optional additional instructions (max 80 chars, nullable)
+     * @param userPrompt     optional additional instructions (max 500 chars, nullable)
+     * @param tier           the user's tier (FREE or PAID)
      * @return the transformation result
      */
     TransformResult transform(Persona persona,
                               List<SituationContext> contexts,
                               ToneLevel toneLevel,
                               String originalText,
-                              String userPrompt);
+                              String userPrompt,
+                              String senderInfo,
+                              UserTier tier);
 
     /**
      * Partial rewrite: rewrites only the selected portion of text.
@@ -37,7 +41,9 @@ public interface TransformService {
      * @param persona        the target persona
      * @param contexts       one or more situation contexts
      * @param toneLevel      desired politeness level
-     * @param userPrompt     optional additional instructions (max 80 chars, nullable)
+     * @param userPrompt     optional additional instructions (max 500 chars, nullable)
+     * @param senderInfo     optional sender identification (max 100 chars, nullable)
+     * @param analysisContext optional analysis context from prior two-pass transform (nullable)
      * @return the transformation result containing only the rewritten fragment
      */
     TransformResult partialRewrite(String selectedText,
@@ -45,5 +51,7 @@ public interface TransformService {
                                    Persona persona,
                                    List<SituationContext> contexts,
                                    ToneLevel toneLevel,
-                                   String userPrompt);
+                                   String userPrompt,
+                                   String senderInfo,
+                                   String analysisContext);
 }

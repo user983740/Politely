@@ -5,6 +5,6 @@ public enum Persona {
     CLIENT,
     PARENT,
     PROFESSOR,
-    COLLEAGUE,
-    OFFICIAL
+    OFFICIAL,
+    OTHER
 }

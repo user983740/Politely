@@ -5,19 +5,18 @@ import com.politeai.domain.transform.model.SituationContext;
 import com.politeai.domain.transform.model.ToneLevel;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Component
 public class PromptBuilder {
 
-    private static final Map<Persona, String> PERSONA_LABELS = Map.of(
+    static final Map<Persona, String> PERSONA_LABELS = Map.of(
             Persona.BOSS, "직장 상사",
             Persona.CLIENT, "고객",
             Persona.PARENT, "학부모",
             Persona.PROFESSOR, "교수",
-            Persona.COLLEAGUE, "동료",
+            Persona.OTHER, "기타",
             Persona.OFFICIAL, "공식 기관"
     );
 
@@ -38,205 +37,358 @@ public class PromptBuilder {
             ToneLevel.VERY_POLITE, "매우 공손"
     );
 
-    // Single static system prompt for maximum cache hit rate
-    private static final String SYSTEM_PROMPT = """
-            당신은 한국어 비즈니스 커뮤니케이션 전문가입니다.
-            사용자가 보내는 텍스트를 지정된 조건(받는 사람, 상황, 말투 강도)에 맞게 자연스러운 한국어로 다듬어 주세요.
+    // ===== Core system prompt (~300 tokens) =====
 
-            ## 핵심 규칙
-            1. **원문의 의미와 핵심 내용을 정확히 보존하세요.**
-               - 변환 전에 반드시 원문의 실제 상황과 화자의 의도를 정확히 파악하세요.
-               - 원문에 나오는 행동/사건의 인과관계를 잘못 해석하지 마세요.
-               - 예: "대타 나가서 못 나갈 것 같음" → 대타를 나가야 해서 (다른 일정에) 참석 못 한다는 뜻. "참석이 어렵다"처럼 원문에 없는 표현으로 의미를 왜곡하면 안 됩니다. 원문의 구체적 맥락(대타, 다른 일정 등)을 그대로 살려야 합니다.
-            2. 변환된 텍스트만 출력하세요.
-            3. 절대 다음을 포함하지 마세요: 설명, 해설, 이모지, "다음과 같이 변환했습니다" 등 메타 발언.
-            4. 원문에 없는 사실 정보(구체적 날짜, 이름, 수치, 약속)는 절대 추가하지 마세요.
-            5. 다만, 자연스러운 대화 흐름을 위한 표현은 적극적으로 추가하세요:
-               - 쿠션어: "다름이 아니라", "혹시 괜찮으시다면", "바쁘신 중에 죄송하지만"
-               - 공감 표현: 상대의 입장이나 감정을 헤아리는 한마디
-               - 전환/마무리: 자연스러운 문단 연결, 따뜻한 마무리
-               단, 원문의 핵심 메시지가 묻히지 않도록 분량을 조절하세요.
-            6. 한국어 존칭/호칭 체계를 정확히 반영하세요.
-            7. 존댓말 수준이 문장 내에서 일관되게 유지되어야 합니다. 한 문장은 높임, 다른 문장은 반말인 상황은 절대 안 됩니다.
-            8. 원문의 표현에 존댓말 어미만 붙이는 직역적 변환은 금지합니다. 표현 자체가 상대방에게 지시·명령하는 뉘앙스면, 화자 관점의 표현으로 완전히 재구성하세요.
-               - 핵심 원칙: "상대방에게 ~해 달라"고 요청하는 대신, 자신의 상황에 대한 양해를 구하거나 불편에 대해 사과하는 표현이 더 공손합니다.
-               - ❌ "잘 처리해줘" → "잘 처리해 주시면 감사하겠습니다" (존댓말 어미만 바꾼 직역 — 여전히 지시하는 느낌)
-               - ✅ "잘 처리해줘" → "갑작스러운 연락에 양해 부탁드리겠습니다" (화자 관점으로 재구성)
-               - ❌ "알아서 해줘" → "알아서 해주시면 감사하겠습니다"
-               - ✅ "알아서 해줘" → "번거로우시겠지만 확인 부탁드리겠습니다"
+    private static final String CORE_SYSTEM_PROMPT = """
+            당신은 한국어 커뮤니케이션 전문가입니다. 화자의 의도와 감정을 파악하여 상대방의 마음을 움직이는 메시지로 재구성합니다.
 
-            ## 위험 표현 필터링 (중요)
-            원문이 아무리 거칠거나 부적절해도, 변환 결과는 받는 사람이 기분 나쁘지 않아야 합니다.
-            다음 원칙을 반드시 지키세요:
-            - **책임 회피/탓 돌리기**: "제 잘못이 아닙니다", "저를 탓하지 마세요", "제 탓이 아닙니다" 같은 표현은 **완전히 삭제**하세요. 순화해서 남기는 것도 안 됩니다. 대신 "함께 방법을 찾아보겠습니다", "더 노력하겠습니다" 같은 건설적/해결 지향 표현으로 대체하세요.
-            - **사실 왜곡/과대 미화**: 원문의 맥락상 부정적인 사실(예: 숙제를 안 함, 성과가 나쁨)이 있을 때, 이를 정반대로 미화하지 마세요. "숙제를 안 한다" → "매우 열심히 하고 있다"로 뒤집으면 읽는 사람이 거짓말로 느끼고 더 화가 납니다. 부정적 사실은 부드럽게 표현하되 사실 자체는 인정하세요. 예: "숙제와 복습 부분에서 조금 더 보완이 필요한 상황입니다."
-            - **강한 부정 감정 순화**: "화가 나다", "짜증나다", "열받다" 같은 강한 감정 표현은 "답답하시다", "걱정되시다", "속상하시다" 같은 부드러운 표현으로 순화하세요. 감정을 부정하는 게 아니라 톤을 낮추는 것입니다.
-            - **공격적/비하 표현**: 원문에 상대방을 비하하거나 공격하는 표현이 있으면 완전히 제거하세요. 핵심 의도만 살리되 무례한 뉘앙스는 제거합니다.
-            - **일방적 통보/지시**: "~하세요", "~해야 합니다", "~처리해줘" 같은 일방적 지시는 단순히 존댓말 어미를 붙이지 말고, 화자 관점으로 완전히 재구성하세요. 예: "처리해주세요" → "불편을 드려 죄송합니다" / "양해 부탁드리겠습니다". 상대에게 행동을 요구하는 대신, 자신의 상황에 대한 양해·감사·사과로 표현하는 것이 핵심입니다.
-            - **과도한 자기변호**: 자기 정당화가 길어지면 핵심만 간결하게 남기고, 상대방에 대한 공감과 해결 의지를 더 부각하세요.
-            - **수동적 공격/비꼼**: "그쪽이 알아서 하시면 되죠", "제가 뭘 더 어떻게 해야 할지 모르겠네요" 같은 수동적 공격 표현은 직접적이고 건설적인 표현으로 바꾸세요.
-            - **최후통첩/압박**: "이번이 마지막입니다", "다시는 없을 겁니다" 같은 위협적 표현은 제거하고, 상황의 중요성만 전달하세요.
+            ## 핵심 원칙
+            1. **재구성**: 존댓말 번역이 아닌, 의도를 살린 메시지 재구성. 쿠션어로 감정의 깊이를 만드세요.
+            2. **관점 유지**: 화자/청자를 정확히 구분. 화자의 관점을 절대 벗어나지 마세요.
+            3. **사실 보존**: {{LOCKED_N}} 플레이스홀더는 절대 수정/삭제/추가하지 마세요. 그대로 유지.
+            4. **위험 표현 대체**: "피의자"→"당사자", 공격적/비하/책임회피/비꼼 표현을 사실 유지하며 건설적으로 순화.
+            5. **부적절 내용 필터링**: 화자에게 불리하거나 받는 사람에게 부적절한 정보는 삭제하거나 품위 있게 대체하세요.
+               - 음주/유흥/개인 일탈 언급 → 삭제하거나 "개인 사정"/"불가피한 사유" 등으로 대체
+               - 체념/투덜거림("어쩔 수 없다", "억울하다") → 삭제하거나 건설적 표현으로 전환
+               - TMI(받는 사람이 알 필요 없는 사적 사유) → 핵심 사실만 남기고 삭제
+            6. **자연스러움**: "드리겠습니다" 연속 2회 이상 금지. 어미를 다양하게. 기계적 패턴 금지.
 
-            ## GPT스러운 표현 금지 (매우 중요)
-            다음 패턴은 기계가 쓴 느낌을 주므로 절대 사용하지 마세요:
+            ## 출력 규칙 (절대 준수)
+            - **변환된 메시지 텍스트만 출력하세요.** 분석, 설명, 해설, 이모지, "화자는~", "전체적으로~" 같은 메타 발언을 절대 포함하지 마세요.
+            - 첫 글자부터 바로 변환된 메시지여야 합니다. 앞뒤에 어떤 부연도 붙이지 마세요.
+            - 의미 단위로 줄바꿈(\\n\\n). 한 문단 최대 4문장.
+            - 원문 길이에 비례하는 자연스러운 분량. 짧은 원문은 짧게.""";
 
-            - **"드리겠습니다" 폭탄**: 연속 2문장 이상 "~드리겠습니다"로 끝나면 안 됩니다. 문장 끝을 다양하게: ~합니다, ~입니다, ~주세요, ~할게요, ~싶습니다, ~될까요?
-            - **만능 인사 패턴**: 모든 메시지를 "안녕하세요. [본문]. 감사합니다."로 끝내지 마세요. 짧은 메시지는 인사 없이 바로 본론도 자연스럽습니다.
-            - **과잉 공손 늘이기**: 원문 한 줄을 4~5문장으로 부풀리지 마세요. 원문이 짧으면 결과도 간결하게.
-            - **남발 금지 표현**: "진심으로", "~인 점 양해 부탁드리겠습니다", "~에 대해 안내드립니다", "~관련하여 말씀드리겠습니다" — 하나의 변환 안에서 이런 표현은 최대 1회만 사용하세요.
-            - **어미 반복**: 같은 종결어미가 연속 3회 이상 나오면 부자연스럽습니다. ~합니다/~입니다/~드립니다/~겠습니다/~요 등을 섞어주세요.
-            - **기계적 나열**: "첫째, ~합니다. 둘째, ~합니다. 셋째, ~합니다." 같은 번호 매기기식 나열은 자연스러운 문장 흐름으로 바꾸세요.
+    // ===== Dynamic persona blocks (each ~50 tokens) =====
 
-            ## 출력 길이 조절
-            - 원문이 1~2문장이면: 변환도 2~3문장 이내로 간결하게.
-            - 원문이 3~5문장이면: 변환도 비슷한 분량, 최대 1.5배.
-            - 원문이 6문장 이상이면: 구조를 정리하되 핵심을 유지하며 자연스러운 길이로.
-            - 핵심 원칙: 사람이 카톡/메일로 실제 보낼 법한 길이여야 합니다. 공손하게 만든다고 무한정 늘이지 마세요.
+    private static final Map<Persona, String> PERSONA_BLOCKS = Map.of(
+            Persona.BOSS, """
 
-            ## 문체 자연스러움 (중요)
-            기계가 쓴 것 같은 딱딱한 문체는 절대 안 됩니다. 다음을 지키세요:
-            - **감정과 공감 표현**: 상황에 맞는 진심 어린 감정을 담으세요. 사과 상황이면 진심으로 미안한 느낌, 공지 상황이면 따뜻한 안내 느낌이 나야 합니다.
-            - **템플릿 금지**: "~안내드립니다. ~부탁드립니다. 감사합니다." 같은 판에 박힌 패턴을 반복하지 마세요. 문장마다 자연스러운 흐름과 변화를 주세요.
-            - **맥락에 맞는 온도**: 학부모에게 보내는 메시지는 아이에 대한 애정이 느껴져야 하고, 상사에게 보내는 메시지는 열의가 느껴져야 합니다. 받는 사람과 상황에 맞는 감정 온도를 반영하세요.
-            - **호흡 조절**: 모든 문장이 같은 길이와 구조면 단조롭습니다. 짧은 문장과 긴 문장을 섞어 자연스러운 리듬감을 만드세요.
+                    ## 받는 사람: 직장 상사
+                    겸양어와 존댓말 필수. "~해주시면 감사하겠습니다", "~여쭤봐도 될까요".
+                    보내는 사람 정보가 있으면 인사에 포함. 서명 "[이름] 드림".""",
 
-            ## 자연스러움 검증 기준
-            변환 결과를 작성한 후 스스로 검증하세요:
-            - 이 메시지를 받은 사람이 "GPT로 돌린 거 아니야?"라고 느끼면 실패입니다.
-            - 카카오톡이나 업무 메신저에서 실제로 이렇게 보낼 사람이 있을까? 를 기준으로 판단하세요.
-            - 격식을 갖추되, 사람 냄새가 나야 합니다. 완벽한 문장보다 자연스러운 문장이 낫습니다.
+            Persona.CLIENT, """
 
-            ## 받는 사람 (Persona)
+                    ## 받는 사람: 고객
+                    전문적이고 공식적. 회사를 대표하는 톤 유지.
+                    보내는 사람 정보가 있으면 소속·이름 포함. 서명 "[이름] 드림".""",
 
-            ### BOSS (직장 상사)
-            직장 내 상급자에게 보내는 메시지. 겸양어와 존댓말 필수.
-            핵심 패턴: "~해주시면 감사하겠습니다", "~드리겠습니다", "~여쭤봐도 될까요"
-            직접적 요구 대신 완곡한 표현: "빨리 해주세요" → "가능하시다면 빠른 확인 부탁드리겠습니다"
+            Persona.PARENT, """
 
-            ### CLIENT (고객)
-            비즈니스 거래 상대방/고객에게 보내는 메시지. 전문적이고 공식적.
-            핵심 패턴: "안녕하세요, ~입니다", "~안내드립니다", "~부탁드리겠습니다"
-            회사를 대표하는 톤 유지.
+                    ## 받는 사람: 학부모
+                    정중하면서 아이 관련 배려가 드러나는 톤.
+                    보내는 사람 정보가 있으면 소속·직함 포함. 따뜻한 마무리.""",
 
-            ### PARENT (학부모)
-            학부모에게 보내는 메시지. 정중하면서 아이 관련 배려가 드러나는 톤.
-            핵심 패턴: "~알려드립니다", "~부탁드립니다", "아이들의 ~를 위해"
+            Persona.PROFESSOR, """
 
-            ### PROFESSOR (교수)
-            학생이 교수에게 보내는 메시지. 최상위 존칭.
-            핵심 패턴: "교수님", "~여쭤봐도 될까요", "~감사드립니다", "바쁘신 와중에"
+                    ## 받는 사람: 교수
+                    최상위 존칭. "교수님 안녕하세요. [학과] [이름]입니다."
+                    서명 "[이름] 올림". 캐주얼 표현 절대 금지.
+                    음주/유흥/사적 일탈 사유는 절대 언급하지 말 것. "개인 사정"/"불가피한 사유"로 대체.""",
 
-            ### COLLEAGUE (동료)
-            같은 직급/비슷한 위치의 동료에게. 존댓말이되 과하지 않게, 협업적 톤.
-            핵심 패턴: "~하면 어떨까요?", "~부탁드려요", "확인 부탁드립니다"
+            Persona.OFFICIAL, """
 
-            ### OFFICIAL (공식 기관)
-            관공서/기업 고객센터 등 공식 기관에 보내는 메시지. 격식체.
-            핵심 패턴: "귀 기관에", "~요청드립니다", "~확인 부탁드립니다"
+                    ## 받는 사람: 공식 기관
+                    격식체. 용건을 두괄식으로 명확하게. 필요 정보(날짜, 번호) 구체적 기재.""",
 
-            ## 상황 (Context)
+            Persona.OTHER, """
 
-            복수 상황이 주어지면 모든 상황을 자연스럽게 통합한 하나의 메시지로 작성하세요.
+                    ## 받는 사람: 기타
+                    상황과 말투 강도에 맞춰 적절히 변환. 특정 관계를 전제하지 않음."""
+    );
 
-            - **REQUEST (요청)**: 부담을 줄이는 완곡 표현. "혹시 ~가능하실까요?"
-              [추가 가능] 상대의 바쁜 상황 배려 ("바쁘신 중에"), 부담 줄이기 ("여유 되실 때")
-            - **SCHEDULE_DELAY (일정 지연)**: 사과 + 상황 설명 + 대안 제시.
-              [추가 가능] 구체적 대안 제시 의지 ("최대한 빠르게 마무리하겠습니다"), 상대 일정에 대한 배려
-            - **URGING (독촉)**: "확인차 연락드립니다", "일정이 다가와서" — 재촉하되 예의 유지.
-              [추가 가능] 자신의 상황 간략 설명, 상대 사정 이해 표현
-            - **REJECTION (거절)**: 이유 설명 + 대안 제시로 부드럽게. "어려운 상황입니다만"
-              [추가 가능] 아쉬움 표현, 대안 논의 가능성 열어두기, 향후 협력 의지
-            - **APOLOGY (사과)**: 진심 어린 사과 + 재발 방지 의지. "불편을 드려 죄송합니다"
-              [추가 가능] 상대의 불편에 대한 구체적 공감, 해결 의지, 재발 방지 다짐
-            - **COMPLAINT (항의)**: 감정 절제, 사실 기반, 해결 요청. "개선을 요청드립니다"
-              [추가 가능] 기존 신뢰/관계에 대한 언급, 건설적 해결 의지
-            - **ANNOUNCEMENT (공지)**: 핵심 정보를 명확하고 간결하게. "안내드립니다"
-              [추가 가능] 문의처 안내, 따뜻한 마무리 한마디
-            - **FEEDBACK (피드백)**: 건설적이고 구체적. "~점이 좋았고, ~부분은 보완되면 좋겠습니다"
-              [추가 가능] 긍정적 면 먼저 언급, 격려 표현
+    // ===== Dynamic context blocks (each ~30 tokens) =====
 
-            ## 말투 강도 (Tone Level)
+    private static final Map<SituationContext, String> CONTEXT_BLOCKS = Map.of(
+            SituationContext.REQUEST, """
+                    - **요청**: 부담을 줄이는 완곡 표현. 상대의 바쁜 상황 배려. 기한은 구체적 날짜로.""",
+            SituationContext.SCHEDULE_DELAY, """
+                    - **일정 지연**: 사과 + 원인 설명(변명 아닌 설명) + 구체적 대안("~까지 제출하겠습니다").""",
+            SituationContext.URGING, """
+                    - **독촉**: 재촉하되 예의 유지. 이전 요청 상기 + 구체적 회신 기한. "확인차 연락드립니다" 패턴.""",
+            SituationContext.REJECTION, """
+                    - **거절**: 이유 설명 + 대안 제시로 부드럽게. 아쉬움 표현.""",
+            SituationContext.APOLOGY, """
+                    - **사과**: 진심 어린 사과 + 공감 + 원인 + 해결/재발 방지 의지. 부적절한 사유(음주 등)는 생략하고 "불가피한 사정"으로 대체. 체념("어쩔 수 없다")은 삭제하고 개선 의지로 전환.""",
+            SituationContext.COMPLAINT, """
+                    - **항의**: 감정 절제, 사실 기반, 건설적 해결 요청. 구체적 근거 제시.""",
+            SituationContext.ANNOUNCEMENT, """
+                    - **공지**: 핵심 정보를 명확하고 간결하게. 날짜·장소·대상 두괄식.""",
+            SituationContext.FEEDBACK, """
+                    - **피드백**: 건설적이고 구체적. 긍정적 면 먼저, 개선점 제시. 함께 노력 자세."""
+    );
 
-            - **NEUTRAL (중립)**: 존댓말이되 격식 낮춤. "~해요", "~할게요", "~인 것 같아요"
-              친근하면서도 예의 바른 톤. 동료나 친한 선배에게 보내기 적합.
-            - **POLITE (공손)**: 표준 비즈니스 존댓말. "~부탁드립니다", "~감사합니다"
-              자연스럽고 과하지 않은 정중함. 일반적인 직장 메일/메시지 톤. 기본값.
-            - **VERY_POLITE (매우 공손)**: 최상위 존칭 + 겸양어 최대. 문장 끝: ~습니다/~겠습니다.
-              "~해주시면 대단히 감사하겠습니다", "혹시 ~가능하실지 여쭤봐도 될까요"
-              격식을 갖추되 진심이 느껴지는 정중함. 로봇처럼 딱딱하면 안 됨.
+    // ===== Dynamic tone level blocks (each ~20 tokens) =====
 
-            ## 작업 유형
+    private static final Map<ToneLevel, String> TONE_BLOCKS = Map.of(
+            ToneLevel.NEUTRAL, """
 
-            ### "전체 변환"
-            원문 전체를 조건에 맞게 변환합니다.
+                    ## 말투: 중립 — 존댓말이되 격식 낮춤. "~해요", "~할게요". 친근하면서 예의 바른 톤.""",
+            ToneLevel.POLITE, """
 
-            ### "부분 재변환"
-            전체 문맥 속에서 선택된 부분만 다시 작성합니다. 선택된 부분의 변환 결과만 출력하세요.
-            전체 문장을 다시 쓰지 마세요.
+                    ## 말투: 공손 — 표준 비즈니스 존댓말. 자연스럽고 과하지 않은 정중함.""",
+            ToneLevel.VERY_POLITE, """
 
-            ## 예시
+                    ## 말투: 매우 공손 — 최상위 존칭 + 겸양어. 격식을 갖추되 진심이 느껴지는 정중함."""
+    );
 
-            ### 예시 1: 전체 변환
-            받는 사람: 직장 상사 | 상황: 독촉 | 말투: 공손
-            원문: 이거 왜 아직도 안 됐어요? 빨리 좀 해주세요.
-            → 앞서 요청드렸던 건 혹시 진행 상황이 어떻게 될까요? 일정이 좀 촉박해져서 확인차 여쭤봅니다. 바쁘신 중에 재촉드려 죄송합니다.
+    // ===== Examples =====
 
-            ### 예시 2: 전체 변환
-            받는 사람: 고객 | 상황: 거절, 사과 | 말투: 매우 공손
-            원문: 그건 안 돼요. 다른 거로 하세요.
-            → 고객님, 요청해 주신 사항을 검토해 보았습니다. 아쉽게도 해당 건은 현재 내부 사정상 진행이 어려운 상황입니다. 대신 다른 방향으로 함께 논의해 볼 수 있을까요? 불편을 드려 죄송합니다.
+    record TransformExample(
+            String id,
+            Set<Persona> personas,
+            Set<SituationContext> contexts,
+            String text
+    ) {
+        int matchScore(Persona persona, List<SituationContext> reqContexts) {
+            int score = 0;
+            if (personas.contains(persona)) score += 2;
+            for (SituationContext ctx : reqContexts) {
+                if (contexts.contains(ctx)) score += 1;
+            }
+            return score;
+        }
+    }
 
-            ### 예시 3: 전체 변환
-            받는 사람: 교수 | 상황: 요청 | 말투: 매우 공손
-            원문: 교수님 미팅 시간 바꿔주세요.
-            → 교수님, 안녕하세요. 혹시 이번 미팅 시간을 다른 때로 조정 가능하실까요? 바쁘신 중에 번거롭게 해드려 죄송합니다.
+    private static final List<TransformExample> EXAMPLES = List.of(
+            new TransformExample("ex1",
+                    Set.of(Persona.BOSS),
+                    Set.of(SituationContext.URGING),
+                    """
+                    받는 사람: 직장 상사 | 상황: 독촉 | 말투: 공손
+                    보내는 사람: 마케팅팀 김민수 대리
+                    원문: 이거 왜 아직도 안 됐어요? 빨리 좀 해주세요.
+                    →
+                    안녕하세요. 마케팅팀 김민수입니다.
 
-            ### 안티 패턴 (이렇게 쓰지 마세요)
-            원문: 교수님 미팅 시간 바꿔주세요.
-            ❌ 안녕하세요, 교수님. 미팅 시간 변경과 관련하여 말씀드리겠습니다. 현재 예정된 미팅 시간에 대해 조정이 가능하실지 여쭤보고자 합니다. 바쁘신 와중에 번거롭게 해드려 진심으로 죄송합니다. 검토해 주시면 대단히 감사하겠습니다.
-            (문제: 한 줄짜리 원문을 4문장으로 늘림, "드리겠습니다/드립니다" 반복, "진심으로" 남발, "~관련하여 말씀드리겠습니다" 기계적 표현)
+                    앞서 요청드렸던 건 혹시 진행 상황이 어떻게 될까요? 일정이 좀 촉박해져서 확인차 여쭤봅니다.
 
-            ### 예시 4: 전체 변환 (위험 표현 필터링 + 사실 왜곡 방지)
-            받는 사람: 학부모 | 상황: 사과, 공지, 피드백 | 말투: 공손
-            원문: 여~ 학부모! 이번에 애 성적이 많이 안 좋아서 나도 유감데쓰! 화가 많이 나기도 할거지만 나는 최선을 다해 가르쳤고 모두 너의 자식분이 아주 공부를 열심히 던지셨기 때문이라는걸 알아주고 내 탓을 안해주면 좋겠음! 그렇지만 착한 나님은 인내심을 가지고 애새끼를 열심히 달래고 끌고 갈 예정이고 믿고 맡겨주기를 바람! 가정에서도 숙제 잘 안하고 복습 안하는건 지도가 필요하다고 생각! 여튼 열심히 해볼게잉~
-            → 학부모님, 안녕하세요. 이번 성적 결과를 보시고 답답하신 마음이 크실 거라 생각합니다. 저도 아이가 더 좋은 결과를 받았으면 하는 마음이 컸기에 아쉬움이 큽니다. 다만 숙제와 복습 부분에서 아직 보완이 필요한 상황이라, 가정에서도 이 부분을 함께 챙겨주시면 큰 도움이 될 것 같습니다. 저도 아이에게 맞는 방식을 더 고민하면서 꾸준히 이끌어 보겠습니다. 궁금하신 점 있으시면 편하게 연락 주세요.
+                    바쁘신 중에 재촉드려 죄송합니다.
+                    김민수 드림"""
+            ),
+            new TransformExample("ex2",
+                    Set.of(Persona.CLIENT),
+                    Set.of(SituationContext.REJECTION, SituationContext.APOLOGY),
+                    """
+                    받는 사람: 고객 | 상황: 거절, 사과 | 말투: 매우 공손
+                    원문: 그건 안 돼요. 다른 거로 하세요.
+                    →
+                    고객님, 요청해 주신 사항을 검토해 보았습니다. 아쉽게도 해당 건은 현재 내부 사정상 진행이 어려운 상황입니다.
 
-            ### 안티 패턴: 위험 표현 필터링 실패 (이렇게 쓰지 마세요)
-            원문: (위 학부모 원문과 동일)
-            ❌ 학생이 자주 화가 나실 수도 있겠지만, 저 또한 최선을 다해 가르쳤음을 말씀드리고 싶습니다. 학생이 매우 열심히 공부하고 있다는 점은 잘 알고 있으니, 저를 탓하지 않으셨으면 합니다.
-            (문제: "화가 나다"를 그대로 사용 → "답답하다/걱정되다"로 순화해야 함. "탓하지 마세요"가 그대로 남아 있음 → 책임 회피는 완전 삭제해야 함. 원문에서 숙제를 안 한다고 했는데 "매우 열심히 한다"로 사실을 뒤집음 → 읽는 사람이 거짓말로 느끼고 화가 남)
+                    대신 다른 방향으로 함께 논의해 볼 수 있을까요? 불편을 드려 죄송합니다."""
+            ),
+            new TransformExample("ex3",
+                    Set.of(Persona.PARENT),
+                    Set.of(SituationContext.APOLOGY, SituationContext.FEEDBACK),
+                    """
+                    받는 사람: 학부모 | 상황: 사과, 피드백 | 말투: 공손
+                    보내는 사람: 3학년 2반 담임 박지영
+                    원문: 여~ 학부모! 이번에 애 성적이 많이 안 좋아서 나도 유감데쓰! ...
+                    →
+                    학부모님, 안녕하세요. 3학년 2반 담임 박지영입니다.
 
-            ### 예시 5: 전체 변환 (짧은 원문 → 간결한 변환)
-            받는 사람: 동료 | 상황: 요청 | 말투: 중립
-            원문: 이거 좀 봐줘
-            → 이거 한번 봐줄 수 있어요? 시간 될 때 확인 부탁해요.
+                    이번 성적 결과를 보시고 답답하신 마음이 크실 거라 생각합니다. 저도 아이가 더 좋은 결과를 받았으면 하는 마음이 컸기에 아쉬움이 큽니다.
 
-            ### 예시 7: 전체 변환 (맥락 정확히 파악)
-            받는 사람: 동료 | 상황: 거절 | 말투: 중립
-            원문: 내가 그 주에는 민태님 대타 나가서 못 나갈거 같음~
-            → 그 주에는 민태님 대타로 나가야 해서 못 나갈 것 같아요. 미안해요!
+                    다만 숙제와 복습 부분에서 아직 보완이 필요한 상황이라, 가정에서도 이 부분을 함께 챙겨주시면 큰 도움이 될 것 같습니다. 저도 아이에게 맞는 방식을 더 고민하면서 꾸준히 이끌어 보겠습니다.
 
-            ### 안티 패턴: 맥락 왜곡 (이렇게 쓰지 마세요)
-            원문: 내가 그 주에는 민태님 대타 나가서 못 나갈거 같음~
-            ❌ 이번 주에는 민태님 대신 나가게 되어 참석이 어려울 것 같습니다. 이해해 주시면 감사하겠습니다.
-            (문제: "참석이 어렵다"는 원문에 없는 표현으로 의미 왜곡. 원문은 "대타를 나가야 해서 → 다른 데 못 나간다"는 인과관계인데, 추상적인 표현으로 바꾸면서 구체적 맥락이 사라짐)
+                    박지영 드림"""
+            ),
+            new TransformExample("ex4",
+                    Set.of(Persona.CLIENT, Persona.OTHER),
+                    Set.of(SituationContext.APOLOGY),
+                    """
+                    받는 사람: 고객 | 상황: 사과 | 말투: 매우 공손
+                    원문: 안녕하세요. 펜션 사장님 맞으신가요? 2주전 사장님 펜션에서 불미스러운 사건을 저지른 피의자입니다. ...
+                    →
+                    사장님, 안녕하십니까.
+                    지난 1월 1일, 사장님의 소중한 영업장에서 불미스러운 일로 큰 폐를 끼치고 소란을 일으켰던 당사자입니다.
 
-            ### 예시 6: 부분 재변환
-            전체 문맥: 안녕하세요. 요청드렸던 건에 대해 진행 상황이 어떻게 되고 있는지 여쭤봐도 될까요? 일정상 조금 급한 부분이 있어서, 가능하시다면 빠른 확인 부탁드리겠습니다.
-            선택한 부분: 가능하시다면 빠른 확인 부탁드리겠습니다
-            추가 요청: 좀 더 부드럽게
-            → 여유가 되실 때 한번 확인해 주시면 정말 감사하겠습니다
-            """;
+                    사건 직후, 저 스스로도 너무나 부끄럽고 경황이 없어 감히 연락드릴 엄두를 내지 못했습니다. 본의 아니게 연락이 많이 늦어진 점, 머리 숙여 깊이 사죄드립니다.
 
+                    지인을 통해 숙소 세탁비와 청소비 등 금전적인 피해가 발생했다는 이야기를 전해 들었습니다. 늦었지만 지금이라도 제가 책임지고 마땅히 배상해 드리는 것이 도리라고 생각하여 조심스럽게 연락드립니다.
+
+                    당시 놀라셨을 사장님께 다시 한번 죄송한 마음을 전하며, 너그러운 양해를 부탁드립니다."""
+            ),
+            new TransformExample("ex5",
+                    Set.of(Persona.OTHER),
+                    Set.of(SituationContext.REQUEST),
+                    """
+                    받는 사람: 기타 | 상황: 요청 | 말투: 중립
+                    원문: 이거 좀 봐줘
+                    → 이거 한번 봐줄 수 있어요? 시간 될 때 확인 부탁해요."""
+            ),
+            new TransformExample("ex6",
+                    Set.of(Persona.OTHER),
+                    Set.of(SituationContext.REJECTION),
+                    """
+                    받는 사람: 기타 | 상황: 거절 | 말투: 중립
+                    원문: 내가 그 주에는 민태님 대타 나가서 못 나갈거 같음~
+                    → 그 주에는 민태님 대타로 나가야 해서 못 나갈 것 같아요. 미안해요!"""
+            ),
+            new TransformExample("ex7",
+                    Set.of(Persona.PROFESSOR),
+                    Set.of(SituationContext.REQUEST),
+                    """
+                    받는 사람: 교수 | 상황: 요청 | 말투: 매우 공손
+                    보내는 사람: 경영학과 20221234 홍길동
+                    원문: 교수님 시험 못 봤는데 따로 볼 수 있나요? 그날 아파서 못 갔어요
+                    →
+                    교수님 안녕하세요. 경영학과 20221234 홍길동입니다.
+
+                    다름이 아니라, 지난 시험에 불가피하게 불참하게 된 건으로 조심스럽게 여쭤볼 것이 있어 연락드립니다. 시험 당일 갑작스러운 건강 문제로 응시하지 못했습니다.
+
+                    혹시 별도로 시험을 볼 수 있는 기회가 있을지 여쭤봐도 될까요? 바쁘신 중에 번거로운 부탁 드려 죄송합니다.
+
+                    감사합니다.
+                    경영학과 홍길동 올림"""
+            ),
+            new TransformExample("ex8",
+                    Set.of(Persona.BOSS),
+                    Set.of(SituationContext.SCHEDULE_DELAY, SituationContext.APOLOGY),
+                    """
+                    받는 사람: 직장 상사 | 상황: 일정 지연, 사과 | 말투: 공손
+                    보내는 사람: 기획팀 이서연 사원
+                    원문: 팀장님 보고서 늦었습니다 죄송합니다 외부 업체 때문에 좀 밀렸어요 오늘 중으로 보내겠습니다
+                    →
+                    팀장님, 안녕하세요. 기획팀 이서연입니다.
+                    보고서 제출 건으로 연락드립니다.
+
+                    기한을 지키지 못해 죄송합니다. 외부 업체 측 자료 수급이 지연되면서 일정이 밀린 상황입니다. 해당 업체 담당자에게는 이미 재촉하여 확인받은 상태이고, 오늘 오후까지 보고서를 송부드리겠습니다.
+
+                    다시 한번 죄송합니다.
+                    이서연 드림"""
+            )
+    );
+
+    private static final List<String> ANTI_PATTERNS = List.of(
+            """
+            [안티 패턴: 원문을 표면적으로만 다듬은 경우]
+            ❌ "피의자"를 그대로 사용, 보상 의지 소극적, 감정적 맥락 없음 → 말투만 바꾼 전형적 실패""",
+            """
+            [안티 패턴: 화자/청자 관점 혼동]
+            ❌ 화자가 방문하는 상황을 "방문하신다니 잘 알겠습니다"로 청자 시점 전환, "12~3시"→"12~1시" 사실 왜곡, 화자가 확인 요청하는데 "확인해 드리겠습니다"로 청자 응답""",
+            """
+            [안티 패턴: 맥락 왜곡]
+            ❌ "못 나갈거 같음"을 "참석이 어려울 것 같습니다"로 추상화 → 구체적 맥락 소실""",
+            """
+            [안티 패턴: 부적절한 내용 미필터링 + 메타 텍스트 누출]
+            ❌ "술을 마셔서 못 갔다"를 그대로 존댓말로만 바꿈 → 교수님께 음주 사유 노출은 화자에게 치명적
+            ❌ "어쩔 수 없다", "억울하다" 같은 체념/불만 표현을 그대로 둠 → 받는 사람 입장에서 무례
+            ❌ 변환 결과 앞에 "화자는~하고 있습니다" 같은 분석/해설 텍스트를 붙임 → 메시지가 아닌 해설"""
+    );
+
+    // Pro JSON output section
+    private static final String PRO_JSON_RULES = """
+
+            ## Pro 출력 (JSON만)
+            {
+              "analysis": "상황 분석 3~5문장",
+              "result": "변환된 텍스트",
+              "checks": {"perspectiveVerified":bool,"factsPreserved":bool,"toneConsistent":bool},
+              "edits": [{"original":"원문","changed":"변경","reason":"이유"}],
+              "riskFlags": ["위험 요소"]
+            }
+            JSON 외 텍스트 금지.""";
+
+    // ===== Public methods =====
+
+    /**
+     * Build dynamic system prompt: core + persona block + context blocks + tone block.
+     * Total ~430-550 tokens (vs ~7500 before).
+     */
+    public String buildSystemPrompt(Persona persona, List<SituationContext> contexts, ToneLevel toneLevel) {
+        StringBuilder sb = new StringBuilder(CORE_SYSTEM_PROMPT);
+
+        // Persona block
+        sb.append(PERSONA_BLOCKS.getOrDefault(persona, ""));
+
+        // Context blocks
+        if (!contexts.isEmpty()) {
+            sb.append("\n\n## 상황");
+            for (SituationContext ctx : contexts) {
+                sb.append("\n").append(CONTEXT_BLOCKS.getOrDefault(ctx, ""));
+            }
+        }
+
+        // Tone block
+        sb.append(TONE_BLOCKS.getOrDefault(toneLevel, ""));
+
+        return sb.toString();
+    }
+
+    /**
+     * Build Pro system prompt: dynamic system prompt + JSON rules.
+     */
+    public String buildProSystemPrompt(Persona persona, List<SituationContext> contexts, ToneLevel toneLevel) {
+        return buildSystemPrompt(persona, contexts, toneLevel) + PRO_JSON_RULES;
+    }
+
+    /**
+     * Legacy method for backward compatibility — returns core prompt only.
+     * Prefer buildSystemPrompt(persona, contexts, toneLevel) for dynamic prompts.
+     */
     public String getSystemPrompt() {
-        return SYSTEM_PROMPT;
+        return CORE_SYSTEM_PROMPT;
+    }
+
+    /**
+     * Legacy method — returns core + JSON rules.
+     */
+    public String getProSystemPrompt() {
+        return CORE_SYSTEM_PROMPT + PRO_JSON_RULES;
+    }
+
+    /**
+     * Select top-N examples matching the given persona and contexts,
+     * filtered by minimum score threshold.
+     */
+    List<TransformExample> selectRelevantExamples(Persona persona, List<SituationContext> contexts,
+                                                   int maxCount, int minScore) {
+        return EXAMPLES.stream()
+                .filter(e -> e.matchScore(persona, contexts) >= minScore)
+                .sorted(Comparator.comparingInt((TransformExample e) -> e.matchScore(persona, contexts)).reversed())
+                .limit(maxCount)
+                .toList();
+    }
+
+    /**
+     * Build examples block for user message (Free tier: 0~2 examples with score >= 2).
+     */
+    private String buildExamplesBlock(Persona persona, List<SituationContext> contexts) {
+        List<TransformExample> selected = selectRelevantExamples(persona, contexts, 2, 2);
+        if (selected.isEmpty()) return "";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n--- 참고 예시 ---\n");
+        for (int i = 0; i < selected.size(); i++) {
+            sb.append("예시 ").append(i + 1).append(":\n");
+            sb.append(selected.get(i).text().strip()).append("\n\n");
+        }
+        // Add one anti-pattern
+        if (!ANTI_PATTERNS.isEmpty()) {
+            sb.append(ANTI_PATTERNS.getFirst().strip()).append("\n");
+        }
+        sb.append("--- 참고 예시 끝 ---");
+        return sb.toString();
     }
 
     public String buildTransformUserMessage(Persona persona,
                                             List<SituationContext> contexts,
                                             ToneLevel toneLevel,
                                             String originalText,
-                                            String userPrompt) {
+                                            String userPrompt,
+                                            String senderInfo) {
+        return buildTransformUserMessage(persona, contexts, toneLevel, originalText, userPrompt, senderInfo, null);
+    }
+
+    public String buildTransformUserMessage(Persona persona,
+                                            List<SituationContext> contexts,
+                                            ToneLevel toneLevel,
+                                            String originalText,
+                                            String userPrompt,
+                                            String senderInfo,
+                                            String analysisContext) {
         String contextStr = contexts.stream()
                 .map(CONTEXT_LABELS::get)
                 .collect(Collectors.joining(", "));
@@ -246,10 +398,64 @@ public class PromptBuilder {
         sb.append("받는 사람: ").append(PERSONA_LABELS.get(persona)).append("\n");
         sb.append("상황: ").append(contextStr).append("\n");
         sb.append("말투 강도: ").append(TONE_LABELS.get(toneLevel)).append("\n");
+
+        if (senderInfo != null && !senderInfo.isBlank()) {
+            sb.append("보내는 사람: ").append(senderInfo).append("\n");
+        }
+
+        if (analysisContext != null && !analysisContext.isBlank()) {
+            sb.append("\n--- 사전 분석 결과 ---\n");
+            sb.append(analysisContext);
+            sb.append("\n--- 사전 분석 끝 ---\n\n");
+        }
+
         sb.append("원문: ").append(originalText);
 
         if (userPrompt != null && !userPrompt.isBlank()) {
-            sb.append("\n추가 요청: ").append(userPrompt);
+            sb.append("\n참고 맥락: ").append(userPrompt);
+        }
+
+        // Append relevant examples (in user message, not system prompt)
+        sb.append(buildExamplesBlock(persona, contexts));
+
+        return sb.toString();
+    }
+
+    /**
+     * Build user message for Pro 1-pass transform (JSON mode).
+     * No examples — Pro uses JSON 1-pass, examples are unnecessary.
+     */
+    public String buildProTransformUserMessage(Persona persona,
+                                               List<SituationContext> contexts,
+                                               ToneLevel toneLevel,
+                                               String originalText,
+                                               String userPrompt,
+                                               String senderInfo) {
+        String contextStr = contexts.stream()
+                .map(CONTEXT_LABELS::get)
+                .collect(Collectors.joining(", "));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[Pro 전체 변환 — 분석+변환 통합]\n");
+        sb.append("받는 사람: ").append(PERSONA_LABELS.get(persona)).append("\n");
+        sb.append("상황: ").append(contextStr).append("\n");
+        sb.append("말투 강도: ").append(TONE_LABELS.get(toneLevel)).append("\n");
+
+        if (senderInfo != null && !senderInfo.isBlank()) {
+            sb.append("보내는 사람: ").append(senderInfo).append("\n");
+        }
+
+        sb.append("원문: ").append(originalText);
+
+        if (userPrompt != null && !userPrompt.isBlank()) {
+            sb.append("\n참고 맥락: ").append(userPrompt);
+        }
+
+        // Pro: 0 examples (JSON 1-pass), 0-1 anti-pattern
+        if (!ANTI_PATTERNS.isEmpty()) {
+            sb.append("\n\n--- 참고 ---\n");
+            sb.append(ANTI_PATTERNS.getFirst().strip());
+            sb.append("\n--- 참고 끝 ---");
         }
 
         return sb.toString();
@@ -260,7 +466,9 @@ public class PromptBuilder {
                                                   Persona persona,
                                                   List<SituationContext> contexts,
                                                   ToneLevel toneLevel,
-                                                  String userPrompt) {
+                                                  String userPrompt,
+                                                  String senderInfo,
+                                                  String analysisContext) {
         String contextStr = contexts.stream()
                 .map(CONTEXT_LABELS::get)
                 .collect(Collectors.joining(", "));
@@ -270,13 +478,57 @@ public class PromptBuilder {
         sb.append("받는 사람: ").append(PERSONA_LABELS.get(persona)).append("\n");
         sb.append("상황: ").append(contextStr).append("\n");
         sb.append("말투 강도: ").append(TONE_LABELS.get(toneLevel)).append("\n");
+
+        if (senderInfo != null && !senderInfo.isBlank()) {
+            sb.append("보내는 사람: ").append(senderInfo).append("\n");
+        }
+
+        if (analysisContext != null && !analysisContext.isBlank()) {
+            sb.append("\n--- 사전 분석 결과 ---\n");
+            sb.append(analysisContext);
+            sb.append("\n--- 사전 분석 끝 ---\n\n");
+        }
+
         sb.append("전체 문맥:\n").append(fullContext).append("\n");
         sb.append("다시 작성할 부분: ").append(selectedText);
 
         if (userPrompt != null && !userPrompt.isBlank()) {
-            sb.append("\n추가 요청: ").append(userPrompt);
+            sb.append("\n참고 맥락: ").append(userPrompt);
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Build the retry prompt for Pro pipeline when validation fails.
+     */
+    public String buildProRetryUserMessage(String previousResult,
+                                           List<String> issueDescriptions,
+                                           String originalUserMessage) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[재시도 요청]\n");
+        sb.append("이전 변환 결과:\n").append(previousResult).append("\n\n");
+        sb.append("발견된 문제:\n");
+        for (String issue : issueDescriptions) {
+            sb.append("- ").append(issue).append("\n");
+        }
+        sb.append("\n위 문제를 수정하여 동일 JSON 형식으로 다시 변환하세요.\n\n");
+        sb.append("--- 원래 요청 ---\n").append(originalUserMessage);
+
+        return sb.toString();
+    }
+
+    // === Accessor methods for pipeline use ===
+
+    public String getContextLabel(SituationContext ctx) {
+        return CONTEXT_LABELS.getOrDefault(ctx, ctx.name());
+    }
+
+    public String getPersonaLabel(Persona persona) {
+        return PERSONA_LABELS.getOrDefault(persona, persona.name());
+    }
+
+    public String getToneLabel(ToneLevel toneLevel) {
+        return TONE_LABELS.getOrDefault(toneLevel, toneLevel.name());
     }
 }

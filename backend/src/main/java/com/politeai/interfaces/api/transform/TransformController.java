@@ -1,10 +1,13 @@
 package com.politeai.interfaces.api.transform;
 
 import com.politeai.application.transform.TransformAppService;
+import com.politeai.domain.transform.model.PipelineResult;
 import com.politeai.domain.transform.model.TransformResult;
 import com.politeai.domain.user.model.User;
 import com.politeai.domain.user.model.UserTier;
 import com.politeai.domain.user.repository.UserRepository;
+import com.politeai.infrastructure.ai.AiStreamingTransformService;
+import com.politeai.interfaces.api.dto.ABTestResponse;
 import com.politeai.interfaces.api.dto.PartialRewriteRequest;
 import com.politeai.interfaces.api.dto.PartialRewriteResponse;
 import com.politeai.interfaces.api.dto.TierInfoResponse;
@@ -12,6 +15,7 @@ import com.politeai.interfaces.api.dto.TransformRequest;
 import com.politeai.interfaces.api.dto.TransformResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -20,6 +24,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1/transform")
@@ -27,26 +32,51 @@ import org.springframework.web.bind.annotation.RestController;
 public class TransformController {
 
     private final TransformAppService transformAppService;
+    private final AiStreamingTransformService streamingTransformService;
     private final UserRepository userRepository;
 
     @PostMapping
     public ResponseEntity<TransformResponse> transform(@Valid @RequestBody TransformRequest request) {
-        UserTier tier = resolveUserTier();
+        UserTier tier = resolveTier(request.tierOverride());
 
-        TransformResult result = transformAppService.transform(
+        PipelineResult result = transformAppService.transform(
                 request.persona(),
                 request.contexts(),
                 request.toneLevel(),
                 request.originalText(),
                 request.userPrompt(),
+                request.senderInfo(),
                 tier);
 
-        return ResponseEntity.ok(new TransformResponse(result.getTransformedText()));
+        return ResponseEntity.ok(new TransformResponse(
+                result.transformedText(),
+                result.analysisContext(),
+                result.checks(),
+                TransformResponse.fromDomainEdits(result.edits()),
+                result.riskFlags()
+        ));
+    }
+
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamTransform(@Valid @RequestBody TransformRequest request) {
+        UserTier tier = resolveTier(request.tierOverride());
+
+        transformAppService.validateTransformRequest(
+                request.originalText(), request.userPrompt(), tier);
+
+        return streamingTransformService.streamTransform(
+                request.persona(),
+                request.contexts(),
+                request.toneLevel(),
+                request.originalText(),
+                request.userPrompt(),
+                request.senderInfo(),
+                tier);
     }
 
     @PostMapping("/partial")
     public ResponseEntity<PartialRewriteResponse> partialRewrite(@Valid @RequestBody PartialRewriteRequest request) {
-        UserTier tier = resolveUserTier();
+        UserTier tier = resolveTier(request.tierOverride());
 
         TransformResult result = transformAppService.partialRewrite(
                 request.selectedText(),
@@ -55,9 +85,44 @@ public class TransformController {
                 request.contexts(),
                 request.toneLevel(),
                 request.userPrompt(),
+                request.senderInfo(),
+                request.analysisContext(),
                 tier);
 
         return ResponseEntity.ok(new PartialRewriteResponse(result.getTransformedText()));
+    }
+
+    @PostMapping(value = "/partial/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamPartialRewrite(@Valid @RequestBody PartialRewriteRequest request) {
+        UserTier tier = resolveTier(request.tierOverride());
+
+        transformAppService.validatePartialRewriteRequest(tier);
+
+        return streamingTransformService.streamPartialRewrite(
+                request.selectedText(),
+                request.fullContext(),
+                request.persona(),
+                request.contexts(),
+                request.toneLevel(),
+                request.userPrompt(),
+                request.senderInfo(),
+                request.analysisContext());
+    }
+
+    @PostMapping("/ab-test")
+    public ResponseEntity<ABTestResponse> abTest(@Valid @RequestBody TransformRequest request) {
+        UserTier tier = resolveTier(request.tierOverride());
+
+        ABTestResponse result = transformAppService.abTest(
+                request.persona(),
+                request.contexts(),
+                request.toneLevel(),
+                request.originalText(),
+                request.userPrompt(),
+                request.senderInfo(),
+                tier);
+
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/tier")
@@ -69,6 +134,16 @@ public class TransformController {
 
         return ResponseEntity.ok(new TierInfoResponse(
                 tier.name(), maxTextLength, partialRewriteEnabled, promptEnabled));
+    }
+
+    private UserTier resolveTier(String tierOverride) {
+        if (tierOverride != null) {
+            try {
+                return UserTier.valueOf(tierOverride);
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return resolveUserTier();
     }
 
     private UserTier resolveUserTier() {

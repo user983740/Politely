@@ -8,6 +8,7 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
     this.code = code;
+    Object.setPrototypeOf(this, ApiError.prototype);
   }
 }
 
