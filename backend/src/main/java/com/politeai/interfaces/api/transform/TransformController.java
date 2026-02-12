@@ -1,13 +1,11 @@
 package com.politeai.interfaces.api.transform;
 
 import com.politeai.application.transform.TransformAppService;
-import com.politeai.domain.transform.model.PipelineResult;
 import com.politeai.domain.transform.model.TransformResult;
 import com.politeai.domain.user.model.User;
 import com.politeai.domain.user.model.UserTier;
 import com.politeai.domain.user.repository.UserRepository;
 import com.politeai.infrastructure.ai.AiStreamingTransformService;
-import com.politeai.interfaces.api.dto.ABTestResponse;
 import com.politeai.interfaces.api.dto.PartialRewriteRequest;
 import com.politeai.interfaces.api.dto.PartialRewriteResponse;
 import com.politeai.interfaces.api.dto.TierInfoResponse;
@@ -39,7 +37,7 @@ public class TransformController {
     public ResponseEntity<TransformResponse> transform(@Valid @RequestBody TransformRequest request) {
         UserTier tier = resolveTier(request.tierOverride());
 
-        PipelineResult result = transformAppService.transform(
+        TransformResult result = transformAppService.transform(
                 request.persona(),
                 request.contexts(),
                 request.toneLevel(),
@@ -49,11 +47,8 @@ public class TransformController {
                 tier);
 
         return ResponseEntity.ok(new TransformResponse(
-                result.transformedText(),
-                result.analysisContext(),
-                result.checks(),
-                TransformResponse.fromDomainEdits(result.edits()),
-                result.riskFlags()
+                result.getTransformedText(),
+                result.getAnalysisContext()
         ));
     }
 
@@ -107,22 +102,6 @@ public class TransformController {
                 request.userPrompt(),
                 request.senderInfo(),
                 request.analysisContext());
-    }
-
-    @PostMapping("/ab-test")
-    public ResponseEntity<ABTestResponse> abTest(@Valid @RequestBody TransformRequest request) {
-        UserTier tier = resolveTier(request.tierOverride());
-
-        ABTestResponse result = transformAppService.abTest(
-                request.persona(),
-                request.contexts(),
-                request.toneLevel(),
-                request.originalText(),
-                request.userPrompt(),
-                request.senderInfo(),
-                tier);
-
-        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/tier")

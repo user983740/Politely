@@ -29,9 +29,30 @@ export interface LockedSpanInfo {
   original: string;
 }
 
+export interface IntermediateData {
+  model1: string;
+  model2: string;
+  model3: string;
+}
+
+export interface UsageInfo {
+  analysisPromptTokens: number;
+  analysisCompletionTokens: number;
+  finalPromptTokens: number;
+  finalCompletionTokens: number;
+  totalCostUsd: number;
+  monthly: {
+    mvp: number;
+    growth: number;
+    mature: number;
+  };
+}
+
 export interface StreamCallbacks {
   onDelta?: (chunk: string) => void;
   onAnalysis?: (analysis: string) => void;
+  onIntermediate?: (data: IntermediateData) => void;
+  onUsage?: (usage: UsageInfo) => void;
   onDone?: (fullText: string) => void;
   onError?: (message: string) => void;
   onSpans?: (spans: LockedSpanInfo[]) => void;
@@ -106,7 +127,7 @@ async function streamSSE(
     if (buffer.trim()) {
       const remaining = buffer.split('\n');
       let currentEvent = '';
-      let currentDataLines: string[] = [];
+      const currentDataLines: string[] = [];
       for (const line of remaining) {
         if (line.startsWith('event:')) {
           currentEvent = line.slice(6).trim();
@@ -137,9 +158,23 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
     case 'error':
       callbacks.onError?.(data);
       break;
+    case 'intermediate':
+      try {
+        callbacks.onIntermediate?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
     case 'spans':
       try {
         callbacks.onSpans?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'usage':
+      try {
+        callbacks.onUsage?.(JSON.parse(data));
       } catch {
         // ignore parse error
       }

@@ -10,5 +10,6 @@ public enum LockedSpanType {
     PHONE,
     MONEY,
     UNIT_NUMBER,
-    LARGE_NUMBER
+    LARGE_NUMBER,
+    SEMANTIC
 }

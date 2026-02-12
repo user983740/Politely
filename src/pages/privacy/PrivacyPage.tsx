@@ -3,7 +3,10 @@ import { Layout } from '@/shared/ui';
 export default function PrivacyPage() {
   return (
     <Layout>
-      <div className="max-w-2xl mx-auto px-4 py-8 sm:py-12">
+      <title>개인정보 처리방침 - Politely</title>
+      <meta name="description" content="Politely 개인정보 처리방침. 이용자의 개인정보 보호를 위한 정책을 안내합니다." />
+      <link rel="canonical" href="https://politely-ai.com/privacy" />
+      <article className="max-w-2xl mx-auto px-4 py-8 sm:py-12">
         <h1 className="text-2xl font-bold text-text mb-8">개인정보 처리방침</h1>
 
         <div className="prose prose-sm text-text space-y-6 text-sm leading-relaxed">
@@ -110,7 +113,7 @@ export default function PrivacyPage() {
             시행일: 2026년 2월 9일
           </p>
         </div>
-      </div>
+      </article>
     </Layout>
   );
 }

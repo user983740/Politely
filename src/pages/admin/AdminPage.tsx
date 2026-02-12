@@ -12,6 +12,8 @@ export default function AdminPage() {
 
   return (
     <Layout>
+      <title>관리자 대시보드 - Politely</title>
+      <meta name="robots" content="noindex, nofollow" />
       <AdminDashboard />
     </Layout>
   );

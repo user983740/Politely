@@ -89,10 +89,10 @@ function BarChart({ data }: { data: { label: string; percent: number }[] }) {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-border bg-white p-4 sm:p-6">
+    <section className="rounded-xl border border-border bg-white p-4 sm:p-6">
       <h3 className="text-sm font-medium text-text mb-3 sm:mb-4">{title}</h3>
       {children}
-    </div>
+    </section>
   );
 }
 

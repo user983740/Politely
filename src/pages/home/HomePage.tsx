@@ -4,8 +4,9 @@ import {useAuthStore, useTransformStore} from '@/shared/store';
 import {PERSONAS, CONTEXTS, MAX_PROMPT_LENGTH, MAX_SENDER_INFO_LENGTH} from '@/shared/config/constants';
 import type {Persona, Context, ToneLevel} from '@/shared/config/constants';
 import {ResultPanel} from '@/widgets/result-panel';
-import {ABTestResultPanel} from '@/widgets/ab-test-result';
-import {getTierInfo, abTestTransform} from '@/features/transform/api';
+import {AnalysisPanel} from '@/widgets/analysis-panel';
+import {CostPanel} from '@/widgets/cost-panel';
+import {getTierInfo} from '@/features/transform/api';
 import {streamTransform} from '@/features/transform/stream-api';
 import type {LockedSpanInfo} from '@/features/transform/stream-api';
 import {ApiError} from '@/shared/api/client';
@@ -18,13 +19,13 @@ const TONE_SLIDER_LEVELS: {key: ToneLevel; label: string}[] = [
 
 const PERSONA_ICONS: Record<string, React.ReactNode> = {
   BOSS: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
       <circle cx="12" cy="7" r="4" />
     </svg>
   ),
   CLIENT: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
       <circle cx="9" cy="7" r="4" />
       <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
@@ -32,19 +33,19 @@ const PERSONA_ICONS: Record<string, React.ReactNode> = {
     </svg>
   ),
   PROFESSOR: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
       <path d="M6 12v5c3 3 9 3 12 0v-5" />
     </svg>
   ),
   PARENT: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       <polyline points="9 22 9 12 15 12 15 22" />
     </svg>
   ),
   OFFICIAL: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="4" y="2" width="16" height="20" rx="2" ry="2" />
       <path d="M9 22v-4h6v4" />
       <line x1="8" y1="6" x2="8.01" y2="6" />
@@ -59,7 +60,7 @@ const PERSONA_ICONS: Record<string, React.ReactNode> = {
     </svg>
   ),
   OTHER: (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="5" cy="12" r="2" />
       <circle cx="12" cy="12" r="2" />
       <circle cx="19" cy="12" r="2" />
@@ -77,9 +78,11 @@ export default function HomePage() {
     userPrompt,
     senderInfo,
     transformedText,
+    intermediateAnalysis,
     isTransforming,
     transformError,
     tierInfo,
+    usageInfo,
     setPersona,
     toggleContext,
     setToneLevel,
@@ -88,13 +91,11 @@ export default function HomePage() {
     setSenderInfo,
     setTransformedText,
     setAnalysisContext,
+    setIntermediateAnalysis,
     setIsTransforming,
     setTransformError,
     setTierInfo,
-    isABTestMode,
-    setIsABTestMode,
-    abTestResult,
-    setABTestResult,
+    setUsageInfo,
     resetForNewInput,
   } = useTransformStore();
 
@@ -155,6 +156,8 @@ export default function HomePage() {
     setTransformError(null);
     setTransformedText('');
     setAnalysisContext(null);
+    setIntermediateAnalysis(null);
+    setUsageInfo(null);
     rawStreamRef.current = '';
     spansRef.current = [];
 
@@ -173,6 +176,7 @@ export default function HomePage() {
           onSpans: (spans) => {
             spansRef.current = spans;
           },
+          onIntermediate: (data) => setIntermediateAnalysis(data),
           onDelta: (chunk) => {
             rawStreamRef.current += chunk;
             if (spansRef.current.length > 0) {
@@ -186,6 +190,7 @@ export default function HomePage() {
             }
           },
           onAnalysis: (analysis) => setAnalysisContext(analysis),
+          onUsage: (usage) => setUsageInfo(usage),
           onDone: (fullText) => setTransformedText(fullText),
           onError: (message) => setTransformError(message),
         },
@@ -217,43 +222,6 @@ export default function HomePage() {
     }
   };
 
-  const handleABTest = async () => {
-    if (!originalText.trim() || !persona || contexts.length === 0 || !toneLevel) return;
-
-    setIsTransforming(true);
-    setTransformError(null);
-    setTransformedText('');
-    setAnalysisContext(null);
-    setABTestResult(null);
-
-    try {
-      const result = await abTestTransform({
-        persona,
-        contexts,
-        toneLevel,
-        originalText,
-        ...(tierInfo?.promptEnabled && userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
-        ...(senderInfo.trim() ? {senderInfo: senderInfo.trim()} : {}),
-        tierOverride: tierInfo?.tier,
-      });
-      setABTestResult(result);
-    } catch (err) {
-      const apiErr = err instanceof ApiError ? err
-        : (err && typeof err === 'object' && 'code' in err && 'status' in err)
-          ? err as ApiError
-          : null;
-
-      if (apiErr) {
-        setTransformError(apiErr.message);
-      } else {
-        console.error('A/B test error:', err);
-        setTransformError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.');
-      }
-    } finally {
-      setIsTransforming(false);
-    }
-  };
-
   const SENDER_INFO_PLACEHOLDERS: Record<string, string> = {
     BOSS: '예: 마케팅팀 김민수 대리',
     CLIENT: '예: (주)ABC 영업부 이지연 과장',
@@ -269,7 +237,7 @@ export default function HomePage() {
 
   const isAllSelected = !!persona && contexts.length > 0 && !!toneLevel;
   const canTransform = isAllSelected && !!originalText.trim() && !isTransforming;
-  const hasResult = !!transformedText || !!abTestResult || isTransforming;
+  const hasResult = !!transformedText || isTransforming;
 
   // Summary labels for mobile collapsed view
   const selectedPersonaLabel = persona ? PERSONAS.find(p => p.key === persona)?.label : null;
@@ -378,6 +346,7 @@ export default function HomePage() {
   if (hasResult) {
     return (
       <div className="h-screen flex flex-col bg-white">
+        <title>변환 결과 - Politely</title>
         {/* Result mode top bar */}
         <header className="flex items-center justify-between px-4 sm:px-8 lg:px-10 py-4 sm:py-5 border-b border-border shrink-0">
           <div className="flex items-center gap-2.5">
@@ -392,7 +361,7 @@ export default function HomePage() {
             onClick={resetForNewInput}
             className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-text border border-border/60 rounded-xl hover:bg-surface transition-colors cursor-pointer"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polyline points="1 4 1 10 7 10" />
               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
             </svg>
@@ -401,16 +370,14 @@ export default function HomePage() {
         </header>
 
         {/* Result content centered */}
-        <div className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
-          <div className={`mx-auto ${abTestResult ? 'max-w-5xl' : 'max-w-2xl'}`}>
-            {abTestResult ? (
-              <ABTestResultPanel result={abTestResult} />
-            ) : (
-              <ResultPanel />
-            )}
+        <section className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
+          <article className="mx-auto max-w-2xl space-y-4">
+            <ResultPanel />
+            <AnalysisPanel intermediateAnalysis={intermediateAnalysis} />
+            {usageInfo && <CostPanel usageInfo={usageInfo} />}
 
             {/* Selection summary chips */}
-            <div className="mt-6 pt-5 border-t border-border/60">
+            <footer className="pt-5 border-t border-border/60">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs text-text-secondary mr-1">설정</span>
                 {selectedPersonaLabel && (
@@ -432,9 +399,9 @@ export default function HomePage() {
                   </span>
                 )}
               </div>
-            </div>
-          </div>
-        </div>
+            </footer>
+          </article>
+        </section>
       </div>
     );
   }
@@ -442,6 +409,8 @@ export default function HomePage() {
   // ===== INPUT MODE =====
   return (
     <div className="h-screen flex flex-col lg:flex-row">
+      <title>Politely - 한국어 말투 다듬기 도구</title>
+      <meta name="description" content="보내기 전 마지막으로 말투를 점검하는 안전망. 상사, 고객, 교수 등 상대방에 맞춰 자연스러운 경어체로 변환해 드립니다." />
       {/* ===== MOBILE HEADER (hidden on desktop) ===== */}
       <header className="lg:hidden flex items-center justify-between px-4 py-3 border-b border-border bg-bg shrink-0">
         <div className="flex items-center gap-2">
@@ -453,17 +422,6 @@ export default function HomePage() {
           <span className="text-base font-bold text-text">Politely</span>
         </div>
         <div className="flex items-center gap-2">
-          {/* A/B toggle (mobile) */}
-          <button
-            onClick={() => setIsABTestMode(!isABTestMode)}
-            className={`px-2 py-1 rounded-full border text-xs font-semibold cursor-pointer transition-colors ${
-              isABTestMode
-                ? 'bg-amber-500 text-white border-amber-500'
-                : 'border-border/60 text-text-secondary hover:border-amber-400 hover:text-amber-600'
-            }`}
-          >
-            A/B
-          </button>
           {/* Tier toggle (mobile) */}
           <button
             onClick={handleTierToggle}
@@ -486,6 +444,7 @@ export default function HomePage() {
                   stroke="currentColor"
                   strokeWidth="2"
                   className="text-text-secondary"
+                  aria-hidden="true"
                 >
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                   <circle cx="12" cy="7" r="4" />
@@ -585,6 +544,7 @@ export default function HomePage() {
                 stroke="currentColor"
                 strokeWidth="2"
                 className="text-text-secondary"
+                aria-hidden="true"
               >
                 <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                 <circle cx="12" cy="7" r="4" />
@@ -607,7 +567,7 @@ export default function HomePage() {
               </Link>
             )}
           </div>
-          {/* Tier toggle + A/B toggle (desktop) */}
+          {/* Tier toggle (desktop) */}
           <div className="mt-3 flex items-center gap-4">
             <button
               onClick={handleTierToggle}
@@ -619,16 +579,6 @@ export default function HomePage() {
               </div>
               <span className={`text-xs transition-colors ${isPaidOverride ? 'font-semibold text-accent' : 'text-text-secondary'}`}>Premium</span>
             </button>
-            <button
-              onClick={() => setIsABTestMode(!isABTestMode)}
-              className={`px-2.5 py-1 rounded-full border text-xs font-semibold cursor-pointer transition-colors ${
-                isABTestMode
-                  ? 'bg-amber-500 text-white border-amber-500'
-                  : 'border-border/60 text-text-secondary hover:border-amber-400 hover:text-amber-600'
-              }`}
-            >
-              A/B
-            </button>
           </div>
         </div>
       </aside>
@@ -637,7 +587,7 @@ export default function HomePage() {
       <main className="flex-1 flex flex-col min-h-0 bg-white">
         {/* Top bar with help/settings icons (desktop only) */}
         <div className="hidden lg:flex justify-end items-center px-10 py-5 gap-1">
-          <button className="p-2 rounded-lg hover:bg-surface text-text-secondary/50 hover:text-text-secondary transition-colors cursor-pointer">
+          <button className="p-2 rounded-lg hover:bg-surface text-text-secondary/50 hover:text-text-secondary transition-colors cursor-pointer" aria-label="도움말">
             <svg
               width="18"
               height="18"
@@ -647,13 +597,14 @@ export default function HomePage() {
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
+              aria-hidden="true"
             >
               <circle cx="12" cy="12" r="10" />
               <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
               <line x1="12" y1="17" x2="12.01" y2="17" />
             </svg>
           </button>
-          <button className="p-2 rounded-lg hover:bg-surface text-text-secondary/50 hover:text-text-secondary transition-colors cursor-pointer">
+          <button className="p-2 rounded-lg hover:bg-surface text-text-secondary/50 hover:text-text-secondary transition-colors cursor-pointer" aria-label="설정">
             <svg
               width="18"
               height="18"
@@ -663,6 +614,7 @@ export default function HomePage() {
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
+              aria-hidden="true"
             >
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -775,25 +727,21 @@ export default function HomePage() {
             )}
           </div>
           <button
-            onClick={isABTestMode ? handleABTest : handleTransform}
+            onClick={handleTransform}
             disabled={!canTransform}
-            className={`px-5 sm:px-6 py-3 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0 flex items-center gap-2 ${
-              isABTestMode
-                ? 'bg-amber-500 hover:bg-amber-600'
-                : 'bg-text hover:bg-primary-light'
-            }`}
+            className="px-5 sm:px-6 py-3 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0 flex items-center gap-2 bg-text hover:bg-primary-light"
           >
             {isTransforming ? (
               <>
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                {isABTestMode ? 'A/B 비교 중...' : '변환 중...'}
+                변환 중...
               </>
             ) : (
               <>
-                {isABTestMode ? 'A/B 비교' : '말투 다듬기'}
+                말투 다듬기
                 <svg
                   width="16"
                   height="16"
@@ -803,6 +751,7 @@ export default function HomePage() {
                   strokeWidth="2.5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
+                  aria-hidden="true"
                 >
                   <line x1="5" y1="12" x2="19" y2="12" />
                   <polyline points="12 5 19 12 12 19" />

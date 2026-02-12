@@ -1,7 +1,5 @@
 package com.politeai.infrastructure.ai;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openai.client.OpenAIClient;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
@@ -11,8 +9,6 @@ import com.politeai.domain.transform.model.SituationContext;
 import com.politeai.domain.transform.model.ToneLevel;
 import com.politeai.domain.transform.model.TransformResult;
 import com.politeai.domain.transform.service.TransformService;
-import com.politeai.domain.user.model.UserTier;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,9 +17,8 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * Pure LLM call wrapper. Pipeline logic lives in TransformPipeline.
- * This service exposes raw LLM call methods and implements TransformService
- * for backward compatibility (direct calls without pipeline).
+ * LLM call wrapper. Implements TransformService for partial rewrite.
+ * Full transform goes through MultiModelPipeline (streaming).
  */
 @Slf4j
 @Service
@@ -32,7 +27,6 @@ public class AiTransformService implements TransformService {
 
     private final OpenAIClient openAIClient;
     private final PromptBuilder promptBuilder;
-    private final ObjectMapper objectMapper;
     private final CacheMetricsTracker cacheMetrics;
 
     @Value("${openai.model}")
@@ -43,34 +37,6 @@ public class AiTransformService implements TransformService {
 
     @Value("${openai.max-tokens}")
     private int maxTokens;
-
-    @PostConstruct
-    void logSystemPromptInfo() {
-        String systemPrompt = promptBuilder.getSystemPrompt();
-        int estimatedTokens = (int) (systemPrompt.length() / 1.5);
-        log.info("Core system prompt length: {} chars, estimated ~{} tokens", systemPrompt.length(), estimatedTokens);
-    }
-
-    /**
-     * Direct transform without pipeline (used for backward compatibility).
-     * For pipeline-based transform, use TransformPipeline.execute() instead.
-     */
-    @Override
-    public TransformResult transform(Persona persona,
-                                     List<SituationContext> contexts,
-                                     ToneLevel toneLevel,
-                                     String originalText,
-                                     String userPrompt,
-                                     String senderInfo,
-                                     UserTier tier) {
-        log.info("Direct transform (no pipeline) - persona: {}, contexts: {}, toneLevel: {}, textLength: {}, tier: {}",
-                persona, contexts, toneLevel, originalText.length(), tier);
-
-        String systemPrompt = promptBuilder.buildSystemPrompt(persona, contexts, toneLevel);
-        String userMessage = promptBuilder.buildTransformUserMessage(
-                persona, contexts, toneLevel, originalText, userPrompt, senderInfo);
-        return callOpenAI(systemPrompt, userMessage, -1, -1, null);
-    }
 
     @Override
     public TransformResult partialRewrite(String selectedText,
@@ -88,36 +54,23 @@ public class AiTransformService implements TransformService {
         String userMessage = promptBuilder.buildPartialRewriteUserMessage(
                 selectedText, fullContext, persona, contexts, toneLevel, userPrompt, senderInfo, analysisContext);
 
-        return callOpenAI(systemPrompt, userMessage, -1, -1, null);
+        return callOpenAI(systemPrompt, userMessage);
     }
 
     /**
-     * Raw OpenAI API call. Used by TransformPipeline and internally.
-     *
-     * @param systemPrompt   system prompt
-     * @param userMessage    user message
-     * @param temp           temperature (-1 to use default)
-     * @param maxTok         max tokens (-1 to use default)
-     * @param responseFormat JSON format (null for text)
+     * Raw OpenAI API call (text mode, default model/temp/maxTokens).
      */
-    public TransformResult callOpenAI(String systemPrompt, String userMessage,
-                                      double temp, int maxTok, ResponseFormatJsonObject responseFormat) {
-        double actualTemp = temp < 0 ? temperature : temp;
-        int actualMaxTok = maxTok < 0 ? maxTokens : maxTok;
-
+    private TransformResult callOpenAI(String systemPrompt, String userMessage) {
         try {
-            var builder = ChatCompletionCreateParams.builder()
+            ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
                     .model(model)
-                    .temperature(actualTemp)
-                    .maxCompletionTokens(actualMaxTok)
+                    .temperature(temperature)
+                    .maxCompletionTokens(maxTokens)
                     .addSystemMessage(systemPrompt)
-                    .addUserMessage(userMessage);
+                    .addUserMessage(userMessage)
+                    .build();
 
-            if (responseFormat != null) {
-                builder.responseFormat(responseFormat);
-            }
-
-            ChatCompletion completion = openAIClient.chat().completions().create(builder.build());
+            ChatCompletion completion = openAIClient.chat().completions().create(params);
 
             completion.usage().ifPresent(usage -> {
                 log.info("Token usage - prompt: {}, completion: {}, total: {}",
@@ -143,39 +96,8 @@ public class AiTransformService implements TransformService {
     }
 
     /**
-     * Pro JSON 1-pass call: calls OpenAI with JSON response format and parses the result.
-     */
-    public TransformResult callOpenAIForPro(String systemPrompt, String userMessage) {
-        TransformResult rawResult = callOpenAI(
-                systemPrompt, userMessage, -1, -1,
-                ResponseFormatJsonObject.builder().build());
-
-        return parseProJsonResponse(rawResult.getTransformedText());
-    }
-
-    private TransformResult parseProJsonResponse(String content) {
-        try {
-            JsonNode node = objectMapper.readTree(content);
-            String analysis = node.has("analysis") ? node.get("analysis").asText() : null;
-            String result = node.has("result") ? node.get("result").asText() : content;
-            return new TransformResult(result.trim(), analysis);
-        } catch (Exception e) {
-            log.warn("Failed to parse Pro JSON response, using raw content as result", e);
-            return new TransformResult(content.trim(), null);
-        }
-    }
-
-    /**
-     * OpenAI API call that returns token usage alongside content.
-     * Uses the default model from config.
-     */
-    public LlmCallResult callOpenAIWithUsage(String systemPrompt, String userMessage,
-                                              double temp, int maxTok, ResponseFormatJsonObject responseFormat) {
-        return callOpenAIWithModel(model, systemPrompt, userMessage, temp, maxTok, responseFormat);
-    }
-
-    /**
      * OpenAI API call with explicit model name and token usage tracking.
+     * Used by MultiModelPipeline for intermediate and final model calls.
      */
     public LlmCallResult callOpenAIWithModel(String modelName, String systemPrompt, String userMessage,
                                               double temp, int maxTok, ResponseFormatJsonObject responseFormat) {

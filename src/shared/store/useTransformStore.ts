@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
-import type { TierInfo, ABTestResponse } from '@/features/transform/api';
+import type { TierInfo, IntermediateAnalysis } from '@/features/transform/api';
+import type { IntermediateData, UsageInfo } from '@/features/transform/stream-api';
 
 interface TransformState {
   persona: Persona | null;
@@ -11,11 +12,11 @@ interface TransformState {
   senderInfo: string;
   transformedText: string;
   analysisContext: string | null;
+  intermediateAnalysis: IntermediateAnalysis | IntermediateData | null;
   isTransforming: boolean;
   transformError: string | null;
   tierInfo: TierInfo | null;
-  isABTestMode: boolean;
-  abTestResult: ABTestResponse | null;
+  usageInfo: UsageInfo | null;
   setPersona: (persona: Persona | null) => void;
   toggleContext: (context: Context) => void;
   setToneLevel: (toneLevel: ToneLevel | null) => void;
@@ -25,11 +26,11 @@ interface TransformState {
   setTransformedText: (text: string) => void;
   appendTransformedText: (chunk: string) => void;
   setAnalysisContext: (ctx: string | null) => void;
+  setIntermediateAnalysis: (data: IntermediateAnalysis | IntermediateData | null) => void;
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
   setTierInfo: (info: TierInfo) => void;
-  setIsABTestMode: (v: boolean) => void;
-  setABTestResult: (result: ABTestResponse | null) => void;
+  setUsageInfo: (info: UsageInfo | null) => void;
   resetForNewInput: () => void;
   reset: () => void;
 }
@@ -43,11 +44,11 @@ const initialState = {
   senderInfo: '',
   transformedText: '',
   analysisContext: null as string | null,
+  intermediateAnalysis: null as IntermediateAnalysis | IntermediateData | null,
   isTransforming: false,
   transformError: null as string | null,
   tierInfo: null as TierInfo | null,
-  isABTestMode: false,
-  abTestResult: null as ABTestResponse | null,
+  usageInfo: null as UsageInfo | null,
 };
 
 export const useTransformStore = create<TransformState>((set) => ({
@@ -67,12 +68,12 @@ export const useTransformStore = create<TransformState>((set) => ({
   appendTransformedText: (chunk) =>
     set((state) => ({ transformedText: state.transformedText + chunk })),
   setAnalysisContext: (analysisContext) => set({ analysisContext }),
+  setIntermediateAnalysis: (intermediateAnalysis) => set({ intermediateAnalysis }),
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
   setTierInfo: (tierInfo) => set({ tierInfo }),
-  setIsABTestMode: (isABTestMode) => set({ isABTestMode }),
-  setABTestResult: (abTestResult) => set({ abTestResult }),
+  setUsageInfo: (usageInfo) => set({ usageInfo }),
   resetForNewInput: () =>
-    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, transformError: null, abTestResult: null }),
+    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, intermediateAnalysis: null, transformError: null, usageInfo: null }),
   reset: () => set(initialState),
 }));
