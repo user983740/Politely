@@ -409,7 +409,7 @@ export default function HomePage() {
   // ===== INPUT MODE =====
   return (
     <div className="h-screen flex flex-col lg:flex-row">
-      <title>Politely - 한국어 말투 다듬기 도구</title>
+      <title>Politely - 한국어 말투 다듬기</title>
       <meta name="description" content="보내기 전 마지막으로 말투를 점검하는 안전망. 상사, 고객, 교수 등 상대방에 맞춰 자연스러운 경어체로 변환해 드립니다." />
       {/* ===== MOBILE HEADER (hidden on desktop) ===== */}
       <header className="lg:hidden flex items-center justify-between px-4 py-3 border-b border-border bg-bg shrink-0">
