@@ -10,6 +10,7 @@ export interface StreamTransformRequest {
   userPrompt?: string;
   senderInfo?: string;
   tierOverride?: string;
+  identityBoosterToggle?: boolean;
 }
 
 export interface StreamPartialRewriteRequest {
@@ -27,12 +28,46 @@ export interface StreamPartialRewriteRequest {
 export interface LockedSpanInfo {
   placeholder: string;
   original: string;
+  type: string;
 }
 
-export interface IntermediateData {
-  model1: string;
-  model2: string;
-  model4: string;
+export interface SegmentData {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface RelationIntentData {
+  relation: string;
+  intent: string;
+  stance: string;
+}
+
+export interface ValidationIssueData {
+  type: string;
+  severity: 'ERROR' | 'WARNING';
+  message: string;
+  matchedText: string | null;
+}
+
+export interface LabelData {
+  segmentId: string;
+  label: string;
+  tier: 'GREEN' | 'YELLOW' | 'RED';
+  text: string;
+}
+
+export interface StatsData {
+  segmentCount: number;
+  greenCount: number;
+  yellowCount: number;
+  redCount: number;
+  lockedSpanCount: number;
+  retryCount: number;
+  identityBoosterFired: boolean;
+  relationIntentFired: boolean;
+  latencyMs: number;
 }
 
 export interface UsageInfo {
@@ -50,12 +85,17 @@ export interface UsageInfo {
 
 export interface StreamCallbacks {
   onDelta?: (chunk: string) => void;
-  onAnalysis?: (analysis: string) => void;
-  onIntermediate?: (data: IntermediateData) => void;
+  onLabels?: (labels: LabelData[]) => void;
+  onStats?: (stats: StatsData) => void;
   onUsage?: (usage: UsageInfo) => void;
   onDone?: (fullText: string) => void;
   onError?: (message: string) => void;
   onSpans?: (spans: LockedSpanInfo[]) => void;
+  onSegments?: (segments: SegmentData[]) => void;
+  onMaskedText?: (text: string) => void;
+  onRelationIntent?: (data: RelationIntentData) => void;
+  onProcessedText?: (text: string) => void;
+  onValidationIssues?: (issues: ValidationIssueData[]) => void;
 }
 
 function getHeaders(): HeadersInit {
@@ -149,18 +189,22 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
     case 'delta':
       callbacks.onDelta?.(data);
       break;
-    case 'analysis':
-      callbacks.onAnalysis?.(data);
-      break;
     case 'done':
       callbacks.onDone?.(data);
       break;
     case 'error':
       callbacks.onError?.(data);
       break;
-    case 'intermediate':
+    case 'labels':
       try {
-        callbacks.onIntermediate?.(JSON.parse(data));
+        callbacks.onLabels?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'stats':
+      try {
+        callbacks.onStats?.(JSON.parse(data));
       } catch {
         // ignore parse error
       }
@@ -175,6 +219,33 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
     case 'usage':
       try {
         callbacks.onUsage?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'segments':
+      try {
+        callbacks.onSegments?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'maskedText':
+      callbacks.onMaskedText?.(data);
+      break;
+    case 'relationIntent':
+      try {
+        callbacks.onRelationIntent?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'processedText':
+      callbacks.onProcessedText?.(data);
+      break;
+    case 'validationIssues':
+      try {
+        callbacks.onValidationIssues?.(JSON.parse(data));
       } catch {
         // ignore parse error
       }

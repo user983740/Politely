@@ -6,7 +6,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -88,20 +90,33 @@ public class OutputValidator {
     );
 
     /**
-     * Validate the LLM output against all rules.
-     *
-     * @param output       the LLM output text (after unmask)
-     * @param originalText the original input text
-     * @param spans        the extracted locked spans
-     * @param maskedOutput the LLM output before unmask (for placeholder check)
-     * @param persona      the target persona
-     * @return validation result with all issues
+     * Validate the LLM output against all rules (backward compat — no redaction map).
      */
     public ValidationResult validate(String output,
                                      String originalText,
                                      List<LockedSpan> spans,
                                      String maskedOutput,
                                      Persona persona) {
+        return validate(output, originalText, spans, maskedOutput, persona, Collections.emptyMap());
+    }
+
+    /**
+     * Validate the LLM output against all rules, including REDACTED_REENTRY check.
+     *
+     * @param output       the LLM output text (after unmask)
+     * @param originalText the original input text
+     * @param spans        the extracted locked spans
+     * @param maskedOutput the LLM output before unmask (for placeholder check)
+     * @param persona      the target persona
+     * @param redactionMap mapping of [REDACTED:...] markers to original text
+     * @return validation result with all issues
+     */
+    public ValidationResult validate(String output,
+                                     String originalText,
+                                     List<LockedSpan> spans,
+                                     String maskedOutput,
+                                     Persona persona,
+                                     Map<String, String> redactionMap) {
         List<ValidationIssue> issues = new ArrayList<>();
 
         checkEmoji(output, issues);
@@ -111,6 +126,7 @@ public class OutputValidator {
         checkLengthOverexpansion(output, originalText, issues);
         checkPerspectiveError(output, persona, issues);
         checkLockedSpanMissing(maskedOutput, spans, issues);
+        checkRedactedReentry(output, maskedOutput, redactionMap, issues);
 
         boolean passed = issues.stream().noneMatch(i -> i.severity() == Severity.ERROR);
 
@@ -270,6 +286,42 @@ public class OutputValidator {
                         ));
                     }
                 }
+            }
+        }
+    }
+
+    // Rule 8: Redacted content reentry
+    private void checkRedactedReentry(String output, String maskedOutput,
+                                       Map<String, String> redactionMap,
+                                       List<ValidationIssue> issues) {
+        if (redactionMap == null || redactionMap.isEmpty()) {
+            return;
+        }
+
+        // Check 1: [REDACTED:...] markers should not appear in output
+        if (maskedOutput != null) {
+            Pattern redactedMarker = Pattern.compile("\\[REDACTED:[^\\]]+\\]");
+            Matcher m = redactedMarker.matcher(maskedOutput);
+            while (m.find()) {
+                issues.add(new ValidationIssue(
+                        ValidationIssueType.REDACTED_REENTRY,
+                        Severity.ERROR,
+                        "REDACTED 마커 출력에 포함됨: " + m.group(),
+                        m.group()
+                ));
+            }
+        }
+
+        // Check 2: Original redacted text (>=10 chars) should not appear in output verbatim
+        for (Map.Entry<String, String> entry : redactionMap.entrySet()) {
+            String originalText = entry.getValue();
+            if (originalText.length() >= 10 && output.contains(originalText)) {
+                issues.add(new ValidationIssue(
+                        ValidationIssueType.REDACTED_REENTRY,
+                        Severity.ERROR,
+                        "제거된 내용 재유입: \"" + originalText.substring(0, Math.min(30, originalText.length())) + "...\"",
+                        entry.getKey()
+                ));
             }
         }
     }

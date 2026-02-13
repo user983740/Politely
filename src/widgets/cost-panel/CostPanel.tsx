@@ -63,7 +63,7 @@ export default function CostPanel({ usageInfo }: Props) {
             <thead>
               <tr className="border-b border-border/60 bg-surface/50">
                 <th className="text-left px-4 py-2.5 text-xs font-medium text-text-secondary">항목</th>
-                <th className="text-right px-4 py-2.5 text-xs font-medium text-text-secondary">분석 (3모델)</th>
+                <th className="text-right px-4 py-2.5 text-xs font-medium text-text-secondary">분석 (구조+라벨)</th>
                 <th className="text-right px-4 py-2.5 text-xs font-medium text-text-secondary">최종 변환</th>
                 <th className="text-right px-4 py-2.5 text-xs font-medium text-text-secondary">합계</th>
               </tr>

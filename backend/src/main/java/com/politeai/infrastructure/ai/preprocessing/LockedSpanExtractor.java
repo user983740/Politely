@@ -74,6 +74,41 @@ public class LockedSpanExtractor {
             new PatternEntry(
                     Pattern.compile("\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d{5,}"),
                     LockedSpanType.LARGE_NUMBER
+            ),
+            // 11. UUID
+            new PatternEntry(
+                    Pattern.compile("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
+                    LockedSpanType.UUID
+            ),
+            // 12. File path / filename with extension
+            new PatternEntry(
+                    Pattern.compile("(?:[\\w./\\\\-]+/)?[\\w.-]+\\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|md|json|xml|yaml|yml|html|css|js|ts|tsx|jsx|java|py|rb|go|rs|cpp|c|h|hpp|sh|bat|sql|log|zip|tar|gz|rar|7z|png|jpg|jpeg|gif|svg|mp4|mp3|wav|avi)\\b"),
+                    LockedSpanType.FILE_PATH
+            ),
+            // 13. Issue/ticket references (#123, JIRA-456)
+            new PatternEntry(
+                    Pattern.compile("#\\d{1,6}|[A-Z]{2,10}-\\d{1,6}"),
+                    LockedSpanType.ISSUE_TICKET
+            ),
+            // 14. Version numbers (v2.1.0, 3.14.1)
+            new PatternEntry(
+                    Pattern.compile("v?\\d{1,4}\\.\\d{1,4}(?:\\.\\d{1,4})?"),
+                    LockedSpanType.VERSION
+            ),
+            // 15. Quoted text (2-60 chars inside quotes)
+            new PatternEntry(
+                    Pattern.compile("[\"'\u201C\u201D\u2018\u2019]([^\"'\u201C\u201D\u2018\u2019]{2,60})[\"'\u201C\u201D\u2018\u2019]"),
+                    LockedSpanType.QUOTED_TEXT
+            ),
+            // 16. Identifiers: camelCase, snake_case, PascalCase (>=4 chars), fn()
+            new PatternEntry(
+                    Pattern.compile("\\b(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*|[A-Z][a-z][a-zA-Z0-9]{2,}|[a-z]+(?:_[a-z]+)+)(?:\\(\\))?\\b"),
+                    LockedSpanType.IDENTIFIER
+            ),
+            // 17. Git commit hashes (7-40 hex chars)
+            new PatternEntry(
+                    Pattern.compile("\\b[0-9a-f]{7,40}\\b"),
+                    LockedSpanType.HASH_COMMIT
             )
     );
 

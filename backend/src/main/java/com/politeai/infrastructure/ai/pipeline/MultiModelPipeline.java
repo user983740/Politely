@@ -6,23 +6,27 @@ import com.politeai.infrastructure.ai.LlmCallResult;
 import com.politeai.infrastructure.ai.preprocessing.LockedSpanExtractor;
 import com.politeai.infrastructure.ai.preprocessing.LockedSpanMasker;
 import com.politeai.infrastructure.ai.preprocessing.TextNormalizer;
+import com.politeai.infrastructure.ai.segmentation.MeaningSegmenter;
 import com.politeai.infrastructure.ai.validation.OutputValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Multi-model pipeline orchestrator.
+ * Multi-model pipeline orchestrator (v2).
  *
  * Pipeline:
- *   preprocess → 4 intermediate models (parallel, 4o-mini) → semantic span merge → Final model (parameterized) → unmask → validate
+ *   A) normalize → B) extract+mask (enhanced regex) → C) segment (server)
+ *   → D) structureLabel (LLM #1) → E?) identityBooster (gating)
+ *   → F?) relationIntent (gating) → G) redact (server)
+ *   → H) Final LLM #2 → I) unmask → validate → (ERROR: 1 retry)
  *
- * The intermediate analysis is shared; only the Final model differs between A/B tests.
+ * Base case: 2 LLM calls. With gating: up to 4.
  */
 @Slf4j
 @Component
@@ -35,143 +39,160 @@ public class MultiModelPipeline {
     private final OutputValidator outputValidator;
     private final MultiModelPromptBuilder multiPromptBuilder;
     private final AiTransformService aiTransformService;
-
-    private static final String ANALYSIS_MODEL = "gpt-4o-mini";
-    private static final int ANALYSIS_MAX_TOKENS = 400;
-    private static final int DECONSTRUCTION_MAX_TOKENS = 600;
-    private static final double ANALYSIS_TEMP = 0.3;
+    private final MeaningSegmenter meaningSegmenter;
+    private final StructureLabelService structureLabelService;
+    private final RedactionService redactionService;
+    private final GatingConditionEvaluator gatingEvaluator;
+    private final IdentityLockBooster identityLockBooster;
+    private final RelationIntentService relationIntentService;
 
     /**
-     * Result of the multi-model pipeline execution, including token usage.
+     * Pair of system prompt and user message for the final model, with locked spans and redaction map.
      */
-    public record MultiModelPipelineResult(
+    public record FinalPromptPair(String systemPrompt, String userMessage,
+                                   List<LockedSpan> lockedSpans,
+                                   Map<String, String> redactionMap) {}
+
+    /**
+     * Result of the analysis phase.
+     */
+    public record AnalysisPhaseResult(
+            String maskedText,
+            List<LockedSpan> lockedSpans,
+            List<Segment> segments,
+            List<LabeledSegment> labeledSegments,
+            String processedText,
+            RedactionService.RedactionResult redaction,
+            RelationIntentService.RelationIntentResult relationIntent,
+            String summaryText,
+            long totalAnalysisPromptTokens,
+            long totalAnalysisCompletionTokens,
+            boolean identityBoosterFired,
+            boolean relationIntentFired,
+            int greenCount,
+            int yellowCount,
+            int redCount
+    ) {}
+
+    /**
+     * Result of the full pipeline execution.
+     */
+    public record PipelineResult(
             String transformedText,
             List<ValidationIssue> validationIssues,
-            long analysisPromptTokens,
-            long analysisCompletionTokens,
-            long finalPromptTokens,
-            long finalCompletionTokens
+            PipelineStats stats
     ) {}
 
     /**
-     * Result of the shared analysis phase (3 intermediate models: situation+intent, locked expressions, deconstruction).
+     * Run the analysis phase: preprocess → segment → label → gating → redact.
      */
-    public record SharedAnalysisResult(
-            String model1Output,
-            String model2Output,
-            String model4Output,
-            long totalPromptTokens,
-            long totalCompletionTokens,
-            String maskedText,
-            List<LockedSpan> lockedSpans
-    ) {}
-
-    /**
-     * Result of merging regex spans with AI-identified semantic spans.
-     */
-    public record MergedSpanResult(String remaskedText, List<LockedSpan> allSpans) {}
-
-    /**
-     * Pair of system prompt and user message for the final model, with locked spans.
-     */
-    public record FinalPromptPair(String systemPrompt, String userMessage, List<LockedSpan> lockedSpans) {}
-
-    /**
-     * Run only the shared analysis phase (preprocess + 3 intermediate models + semantic span merge).
-     * Call this once, then use executeFinal() or buildFinalPrompt() for each A/B variant.
-     */
-    public SharedAnalysisResult executeSharedAnalysis(Persona persona,
-                                                       List<SituationContext> contexts,
-                                                       ToneLevel toneLevel,
-                                                       String originalText,
-                                                       String userPrompt,
-                                                       String senderInfo) {
-        // 1. Preprocess
+    public AnalysisPhaseResult executeAnalysis(Persona persona,
+                                                List<SituationContext> contexts,
+                                                ToneLevel toneLevel,
+                                                String originalText,
+                                                String userPrompt,
+                                                String senderInfo,
+                                                boolean identityBoosterToggle) {
+        // A) Normalize
         String normalized = textNormalizer.normalize(originalText);
+
+        // B) Extract regex locked spans + mask
         List<LockedSpan> regexSpans = spanExtractor.extract(normalized);
         String masked = spanMasker.mask(normalized, regexSpans);
 
         if (!regexSpans.isEmpty()) {
-            log.info("[MultiModel] Extracted {} regex locked spans", regexSpans.size());
+            log.info("[Pipeline] Extracted {} regex locked spans", regexSpans.size());
         }
 
-        // 2. Build intermediate prompts (3 models: situation+intent, locked expressions, deconstruction)
-        String m1System = multiPromptBuilder.buildModel1SystemPrompt();
-        String m1User = multiPromptBuilder.buildModel1UserMessage(persona, contexts, toneLevel, masked, userPrompt, senderInfo);
+        // Track tokens
+        long totalPromptTokens = 0;
+        long totalCompletionTokens = 0;
+        boolean boosterFired = false;
+        boolean relationFired = false;
 
-        String m2System = multiPromptBuilder.buildModel2SystemPrompt();
-        String m2User = multiPromptBuilder.buildModel2UserMessage(persona, masked);
+        // E?) Identity Booster (gating — before segmentation so new spans are included)
+        List<LockedSpan> allSpans = regexSpans;
+        if (gatingEvaluator.shouldFireIdentityBooster(identityBoosterToggle, persona, regexSpans, normalized.length())) {
+            IdentityLockBooster.BoosterResult boostResult = identityLockBooster.boost(persona, normalized, regexSpans, masked);
+            allSpans = boostResult.allSpans();
+            masked = boostResult.remaskedText();
+            totalPromptTokens += boostResult.promptTokens();
+            totalCompletionTokens += boostResult.completionTokens();
+            boosterFired = true;
+        }
 
-        String m4System = multiPromptBuilder.buildModel4SystemPrompt();
-        String m4User = multiPromptBuilder.buildModel4UserMessage(masked);
+        // C) Segment (server-side, no LLM)
+        List<Segment> segments = meaningSegmenter.segment(masked);
 
-        // 3. Run 3 intermediate models in parallel
-        CompletableFuture<LlmCallResult> f1 = CompletableFuture.supplyAsync(() ->
-                aiTransformService.callOpenAIWithModel(ANALYSIS_MODEL, m1System, m1User,
-                        ANALYSIS_TEMP, ANALYSIS_MAX_TOKENS, null));
+        // D) Structure Label (LLM #1)
+        StructureLabelService.StructureLabelResult labelResult = structureLabelService.label(
+                persona, contexts, toneLevel, userPrompt, senderInfo, segments, masked);
+        totalPromptTokens += labelResult.promptTokens();
+        totalCompletionTokens += labelResult.completionTokens();
 
-        CompletableFuture<LlmCallResult> f2 = CompletableFuture.supplyAsync(() ->
-                aiTransformService.callOpenAIWithModel(ANALYSIS_MODEL, m2System, m2User,
-                        ANALYSIS_TEMP, ANALYSIS_MAX_TOKENS, null));
+        // F?) Relation/Intent (gating)
+        RelationIntentService.RelationIntentResult relationResult = null;
+        if (gatingEvaluator.shouldFireRelationIntent(persona, normalized)) {
+            relationResult = relationIntentService.analyze(persona, contexts, toneLevel, masked, userPrompt, senderInfo);
+            totalPromptTokens += relationResult.promptTokens();
+            totalCompletionTokens += relationResult.completionTokens();
+            relationFired = true;
+        }
 
-        CompletableFuture<LlmCallResult> f4 = CompletableFuture.supplyAsync(() ->
-                aiTransformService.callOpenAIWithModel(ANALYSIS_MODEL, m4System, m4User,
-                        ANALYSIS_TEMP, DECONSTRUCTION_MAX_TOKENS, null));
+        // G) Redact (server enforcement)
+        RedactionService.RedactionResult redaction = redactionService.process(masked, labelResult.labeledSegments());
 
-        CompletableFuture.allOf(f1, f2, f4).join();
+        // Count tiers
+        int greenCount = (int) labelResult.labeledSegments().stream()
+                .filter(s -> s.label().tier() == SegmentLabel.Tier.GREEN).count();
+        int yellowCount = redaction.yellowCount();
+        int redCount = redaction.redCount();
 
-        LlmCallResult r1 = safeGet(f1, "Model1-SituationIntent");
-        LlmCallResult r2 = safeGet(f2, "Model2-LockedExpr");
-        LlmCallResult r4 = safeGet(f4, "Model3-Deconstruction");
+        log.info("[Pipeline] Analysis complete — segments={}, GREEN={}, YELLOW={}, RED={}, booster={}, relation={}",
+                segments.size(), greenCount, yellowCount, redCount, boosterFired, relationFired);
 
-        long totalPrompt = r1.promptTokens() + r2.promptTokens() + r4.promptTokens();
-        long totalCompletion = r1.completionTokens() + r2.completionTokens() + r4.completionTokens();
-
-        // 4. Merge semantic spans from Model 2
-        MergedSpanResult mergeResult = mergeSemanticSpans(normalized, regexSpans, r2.content());
-        String finalMasked = mergeResult.remaskedText();
-        List<LockedSpan> allSpans = mergeResult.allSpans();
-
-        log.info("[MultiModel] Shared analysis complete - total tokens: prompt={}, completion={}, spans: regex={}, total={}",
-                totalPrompt, totalCompletion, regexSpans.size(), allSpans.size());
-
-        return new SharedAnalysisResult(
-                r1.content(), r2.content(), r4.content(),
-                totalPrompt, totalCompletion,
-                finalMasked, allSpans
+        return new AnalysisPhaseResult(
+                masked, allSpans, segments, labelResult.labeledSegments(),
+                redaction.processedText(), redaction,
+                relationResult, labelResult.summaryText(),
+                totalPromptTokens, totalCompletionTokens,
+                boosterFired, relationFired,
+                greenCount, yellowCount, redCount
         );
     }
 
     /**
-     * Build the final model prompts without calling the LLM.
+     * Build the final model prompts from analysis results.
      * Used for streaming: caller handles the actual LLM call.
      */
-    public FinalPromptPair buildFinalPrompt(SharedAnalysisResult analysis,
+    public FinalPromptPair buildFinalPrompt(AnalysisPhaseResult analysis,
                                              Persona persona, List<SituationContext> contexts,
                                              ToneLevel toneLevel, String senderInfo) {
         String finalSystem = multiPromptBuilder.buildFinalSystemPrompt(persona, contexts, toneLevel);
         String finalUser = multiPromptBuilder.buildFinalUserMessage(
                 persona, contexts, toneLevel, senderInfo,
-                analysis.model1Output(), analysis.model2Output(),
-                analysis.model4Output(), analysis.lockedSpans());
+                analysis.labeledSegments(), analysis.processedText(),
+                analysis.lockedSpans(), analysis.relationIntent(), analysis.summaryText());
 
-        return new FinalPromptPair(finalSystem, finalUser, analysis.lockedSpans());
+        return new FinalPromptPair(finalSystem, finalUser, analysis.lockedSpans(),
+                analysis.redaction().redactionMap());
     }
 
     /**
-     * Run the Final model using shared analysis results.
+     * Run the Final model using analysis results.
      */
-    public MultiModelPipelineResult executeFinal(String finalModelName,
-                                                  SharedAnalysisResult analysis,
-                                                  Persona persona,
-                                                  List<SituationContext> contexts,
-                                                  ToneLevel toneLevel,
-                                                  String originalText,
-                                                  String senderInfo) {
-        // Build Final prompt with intermediate analysis injected
+    public PipelineResult executeFinal(String finalModelName,
+                                        AnalysisPhaseResult analysis,
+                                        Persona persona,
+                                        List<SituationContext> contexts,
+                                        ToneLevel toneLevel,
+                                        String originalText,
+                                        String senderInfo) {
+        long startTime = System.currentTimeMillis();
+
         FinalPromptPair prompt = buildFinalPrompt(analysis, persona, contexts, toneLevel, senderInfo);
 
-        // Call Final model (plain text, no JSON format)
+        // Call Final model (LLM #2)
         LlmCallResult finalResult = aiTransformService.callOpenAIWithModel(
                 finalModelName, prompt.systemPrompt(), prompt.userMessage(), -1, -1, null);
 
@@ -179,103 +200,57 @@ public class MultiModelPipeline {
         LockedSpanMasker.UnmaskResult unmaskResult = spanMasker.unmask(
                 finalResult.content(), prompt.lockedSpans());
 
-        // Validate
+        // Validate (with redaction map for Rule 8)
         ValidationResult validation = outputValidator.validate(
                 unmaskResult.text(), originalText, prompt.lockedSpans(),
-                finalResult.content(), persona);
+                finalResult.content(), persona, prompt.redactionMap());
 
+        int retryCount = 0;
+
+        // Retry once on ERROR
         if (!validation.passed()) {
-            log.warn("[MultiModel] Final [{}] validation errors: {}", finalModelName,
+            log.warn("[Pipeline] Final validation errors: {}, retrying once",
                     validation.errors().stream().map(ValidationIssue::message).toList());
+            retryCount = 1;
+
+            String errorHint = "\n\n[시스템 검증 오류] " + String.join("; ",
+                    validation.errors().stream().map(ValidationIssue::message).toList());
+            String retryUser = prompt.userMessage() + errorHint;
+
+            LlmCallResult retryResult = aiTransformService.callOpenAIWithModel(
+                    finalModelName, prompt.systemPrompt(), retryUser, -1, -1, null);
+            LockedSpanMasker.UnmaskResult retryUnmask = spanMasker.unmask(
+                    retryResult.content(), prompt.lockedSpans());
+            validation = outputValidator.validate(
+                    retryUnmask.text(), originalText, prompt.lockedSpans(),
+                    retryResult.content(), persona, prompt.redactionMap());
+            unmaskResult = retryUnmask;
+            finalResult = retryResult;
         }
 
-        return new MultiModelPipelineResult(
-                unmaskResult.text(),
-                validation.issues(),
-                analysis.totalPromptTokens(),
-                analysis.totalCompletionTokens(),
+        long totalLatency = System.currentTimeMillis() - startTime;
+
+        PipelineStats stats = new PipelineStats(
+                analysis.totalAnalysisPromptTokens(),
+                analysis.totalAnalysisCompletionTokens(),
                 finalResult.promptTokens(),
-                finalResult.completionTokens()
+                finalResult.completionTokens(),
+                analysis.segments().size(),
+                analysis.greenCount(),
+                analysis.yellowCount(),
+                analysis.redCount(),
+                analysis.lockedSpans().size(),
+                retryCount,
+                analysis.identityBoosterFired(),
+                analysis.relationIntentFired(),
+                totalLatency
         );
+
+        return new PipelineResult(unmaskResult.text(), validation.issues(), stats);
     }
 
-    /**
-     * Merge AI-identified semantic spans (from Model 2) with regex-extracted spans.
-     * Finds each semantic expression in the normalized text, skips overlaps with regex spans,
-     * then re-indexes and re-masks the text.
-     */
-    MergedSpanResult mergeSemanticSpans(String normalizedText,
-                                         List<LockedSpan> regexSpans,
-                                         String model2Output) {
-        List<LockedSpan> semanticSpans = parseSemanticSpans(normalizedText, regexSpans, model2Output);
+    // === Utility ===
 
-        if (semanticSpans.isEmpty()) {
-            return new MergedSpanResult(spanMasker.mask(normalizedText, regexSpans), regexSpans);
-        }
-
-        // Combine and sort by position
-        List<LockedSpan> allSpans = new ArrayList<>(regexSpans);
-        allSpans.addAll(semanticSpans);
-        allSpans.sort(Comparator.comparingInt(LockedSpan::startPos));
-
-        // Re-index and re-assign placeholders
-        List<LockedSpan> reindexed = new ArrayList<>();
-        for (int i = 0; i < allSpans.size(); i++) {
-            LockedSpan s = allSpans.get(i);
-            reindexed.add(new LockedSpan(i, s.originalText(), "{{LOCKED_" + i + "}}", s.type(), s.startPos(), s.endPos()));
-        }
-
-        String remasked = spanMasker.mask(normalizedText, reindexed);
-        log.info("[MultiModel] Merged {} semantic spans (total: {})", semanticSpans.size(), reindexed.size());
-
-        return new MergedSpanResult(remasked, reindexed);
-    }
-
-    /**
-     * Parse Model 2 line-based output ("- expression" per line) and find non-overlapping semantic spans in the text.
-     */
-    private List<LockedSpan> parseSemanticSpans(String normalizedText,
-                                                  List<LockedSpan> regexSpans,
-                                                  String model2Output) {
-        List<LockedSpan> result = new ArrayList<>();
-        if (model2Output == null || model2Output.isBlank() || model2Output.trim().equals("없음")) {
-            return result;
-        }
-
-        try {
-            int nextIndex = regexSpans.size(); // Start indexing after regex spans
-
-            for (String line : model2Output.split("\n")) {
-                line = line.trim();
-                if (!line.startsWith("- ")) continue;
-
-                String text = line.substring(2).trim();
-                if (text.isBlank()) continue;
-
-                // Find position in normalized text
-                int pos = normalizedText.indexOf(text);
-                if (pos < 0) continue;
-
-                int endPos = pos + text.length();
-
-                // Check overlap with existing regex spans
-                if (overlapsAny(pos, endPos, regexSpans)) continue;
-
-                result.add(new LockedSpan(
-                        nextIndex++, text,
-                        "{{LOCKED_" + (nextIndex - 1) + "}}",
-                        LockedSpanType.SEMANTIC, pos, endPos
-                ));
-            }
-        } catch (Exception e) {
-            log.warn("[MultiModel] Failed to parse Model 2 semantic spans: {}", e.getMessage());
-        }
-        return result;
-    }
-
-    /**
-     * Check if a span [start, end) overlaps with any existing span.
-     */
     private boolean overlapsAny(int start, int end, List<LockedSpan> spans) {
         for (LockedSpan span : spans) {
             if (start < span.endPos() && end > span.startPos()) {
@@ -289,7 +264,7 @@ public class MultiModelPipeline {
         try {
             return future.join();
         } catch (Exception e) {
-            log.warn("[MultiModel] {} failed, using empty fallback: {}", label, e.getMessage());
+            log.warn("[Pipeline] {} failed, using empty fallback: {}", label, e.getMessage());
             return new LlmCallResult("", null, 0, 0);
         }
     }

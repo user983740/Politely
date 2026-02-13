@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
-import type { TierInfo, IntermediateAnalysis } from '@/features/transform/api';
-import type { IntermediateData, UsageInfo } from '@/features/transform/stream-api';
+import type { TierInfo } from '@/features/transform/api';
+import type { LabelData, StatsData, UsageInfo, SegmentData, RelationIntentData, ValidationIssueData } from '@/features/transform/stream-api';
 
 interface TransformState {
   persona: Persona | null;
@@ -12,7 +12,13 @@ interface TransformState {
   senderInfo: string;
   transformedText: string;
   analysisContext: string | null;
-  intermediateAnalysis: IntermediateAnalysis | IntermediateData | null;
+  labels: LabelData[] | null;
+  pipelineStats: StatsData | null;
+  segments: SegmentData[] | null;
+  maskedText: string | null;
+  relationIntent: RelationIntentData | null;
+  processedText: string | null;
+  validationIssues: ValidationIssueData[] | null;
   isTransforming: boolean;
   transformError: string | null;
   tierInfo: TierInfo | null;
@@ -26,7 +32,13 @@ interface TransformState {
   setTransformedText: (text: string) => void;
   appendTransformedText: (chunk: string) => void;
   setAnalysisContext: (ctx: string | null) => void;
-  setIntermediateAnalysis: (data: IntermediateAnalysis | IntermediateData | null) => void;
+  setLabels: (labels: LabelData[] | null) => void;
+  setPipelineStats: (stats: StatsData | null) => void;
+  setSegments: (segments: SegmentData[] | null) => void;
+  setMaskedText: (text: string | null) => void;
+  setRelationIntent: (data: RelationIntentData | null) => void;
+  setProcessedText: (text: string | null) => void;
+  setValidationIssues: (issues: ValidationIssueData[] | null) => void;
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
   setTierInfo: (info: TierInfo) => void;
@@ -44,7 +56,13 @@ const initialState = {
   senderInfo: '',
   transformedText: '',
   analysisContext: null as string | null,
-  intermediateAnalysis: null as IntermediateAnalysis | IntermediateData | null,
+  labels: null as LabelData[] | null,
+  pipelineStats: null as StatsData | null,
+  segments: null as SegmentData[] | null,
+  maskedText: null as string | null,
+  relationIntent: null as RelationIntentData | null,
+  processedText: null as string | null,
+  validationIssues: null as ValidationIssueData[] | null,
   isTransforming: false,
   transformError: null as string | null,
   tierInfo: null as TierInfo | null,
@@ -68,12 +86,18 @@ export const useTransformStore = create<TransformState>((set) => ({
   appendTransformedText: (chunk) =>
     set((state) => ({ transformedText: state.transformedText + chunk })),
   setAnalysisContext: (analysisContext) => set({ analysisContext }),
-  setIntermediateAnalysis: (intermediateAnalysis) => set({ intermediateAnalysis }),
+  setLabels: (labels) => set({ labels }),
+  setPipelineStats: (pipelineStats) => set({ pipelineStats }),
+  setSegments: (segments) => set({ segments }),
+  setMaskedText: (maskedText) => set({ maskedText }),
+  setRelationIntent: (relationIntent) => set({ relationIntent }),
+  setProcessedText: (processedText) => set({ processedText }),
+  setValidationIssues: (validationIssues) => set({ validationIssues }),
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
   setTierInfo: (tierInfo) => set({ tierInfo }),
   setUsageInfo: (usageInfo) => set({ usageInfo }),
   resetForNewInput: () =>
-    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, intermediateAnalysis: null, transformError: null, usageInfo: null }),
+    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, relationIntent: null, processedText: null, validationIssues: null, transformError: null, usageInfo: null }),
   reset: () => set(initialState),
 }));

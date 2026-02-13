@@ -66,7 +66,8 @@ public class TransformController {
                 request.originalText(),
                 request.userPrompt(),
                 request.senderInfo(),
-                tier);
+                tier,
+                Boolean.TRUE.equals(request.identityBoosterToggle()));
     }
 
     @PostMapping("/partial")

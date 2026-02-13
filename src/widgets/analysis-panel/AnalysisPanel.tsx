@@ -1,32 +1,38 @@
 import { useState } from 'react';
-import type { IntermediateAnalysis } from '@/features/transform/api';
-import type { IntermediateData } from '@/features/transform/stream-api';
+import type { LabelData } from '@/features/transform/stream-api';
 
 interface Props {
-  intermediateAnalysis: IntermediateAnalysis | IntermediateData | null;
+  labels: LabelData[] | null;
 }
 
-function getOutputs(analysis: IntermediateAnalysis | IntermediateData): {
-  model1Output: string;
-  model2Output: string;
-  model4Output: string;
-} {
-  if ('model1Output' in analysis) {
-    return analysis;
-  }
-  return {
-    model1Output: analysis.model1,
-    model2Output: analysis.model2,
-    model4Output: analysis.model4,
-  };
-}
+const LABEL_DISPLAY: Record<string, string> = {
+  CORE_FACT: '핵심사실',
+  CORE_INTENT: '핵심의도',
+  COURTESY: '예의',
+  EMOTIONAL: '감정과잉',
+  OUT_OF_SCOPE: '범위초과',
+  SPECULATION: '추측',
+  BLAME: '책임전가',
+  SELF_DEFENSE: '자기변호',
+  PRIVATE_TMI: '사적정보',
+  AGGRESSION: '공격/비난',
+  GRUMBLE: '체념/투덜',
+};
 
-export default function AnalysisPanel({ intermediateAnalysis }: Props) {
+const TIER_STYLES: Record<string, { bg: string; badge: string; text: string }> = {
+  GREEN: { bg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-900' },
+  YELLOW: { bg: 'bg-amber-50', badge: 'bg-amber-100 text-amber-700', text: 'text-amber-900' },
+  RED: { bg: 'bg-red-50', badge: 'bg-red-100 text-red-700', text: 'text-red-900' },
+};
+
+export default function AnalysisPanel({ labels }: Props) {
   const [open, setOpen] = useState(false);
 
-  if (!intermediateAnalysis) return null;
+  if (!labels || labels.length === 0) return null;
 
-  const { model1Output, model2Output, model4Output } = getOutputs(intermediateAnalysis);
+  const greenCount = labels.filter((l) => l.tier === 'GREEN').length;
+  const yellowCount = labels.filter((l) => l.tier === 'YELLOW').length;
+  const redCount = labels.filter((l) => l.tier === 'RED').length;
 
   return (
     <div className="border border-border/60 rounded-xl overflow-hidden">
@@ -34,7 +40,24 @@ export default function AnalysisPanel({ intermediateAnalysis }: Props) {
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-4 py-3 bg-surface border-b border-border/60 cursor-pointer hover:bg-surface/80 transition-colors"
       >
-        <h3 className="text-sm font-semibold text-text">사전 분석 결과</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-text">구조 분석</h3>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 tabular-nums">
+              보존 {greenCount}
+            </span>
+            {yellowCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 tabular-nums">
+                수정 {yellowCount}
+              </span>
+            )}
+            {redCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 tabular-nums">
+                제거 {redCount}
+              </span>
+            )}
+          </div>
+        </div>
         <svg
           width="16"
           height="16"
@@ -52,26 +75,22 @@ export default function AnalysisPanel({ intermediateAnalysis }: Props) {
       </button>
 
       {open && (
-        <div className="p-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Model 1: Situation Analysis + Speaker Intent */}
-            <div className="border border-border/40 rounded-lg p-3">
-              <h4 className="text-xs font-semibold text-accent mb-2">상황 분석 및 화자 의도</h4>
-              <p className="text-xs text-text-secondary whitespace-pre-wrap">{model1Output}</p>
-            </div>
+        <div className="p-4 space-y-2">
+          {labels.map((label, i) => {
+            const style = TIER_STYLES[label.tier];
+            const displayName = LABEL_DISPLAY[label.label] ?? label.label;
 
-            {/* Model 2: Locked Expression Extraction */}
-            <div className="border border-border/40 rounded-lg p-3">
-              <h4 className="text-xs font-semibold text-accent mb-2">보존 필수 표현</h4>
-              <p className="text-xs text-text-secondary whitespace-pre-wrap">{model2Output}</p>
-            </div>
-
-            {/* Model 3 (formerly 4): Source Text Deconstruction */}
-            <div className="border border-border/40 rounded-lg p-3">
-              <h4 className="text-xs font-semibold text-accent mb-2">원문 해체</h4>
-              <p className="text-xs text-text-secondary whitespace-pre-wrap">{model4Output}</p>
-            </div>
-          </div>
+            return (
+              <div key={`${label.segmentId}-${i}`} className={`flex items-start gap-2 px-3 py-2 rounded-lg ${style.bg}`}>
+                <span className={`shrink-0 px-1.5 py-0.5 text-xs font-medium rounded ${style.badge}`}>
+                  {displayName}
+                </span>
+                <span className={`text-xs leading-relaxed ${label.tier === 'RED' ? 'line-through text-red-400' : style.text}`}>
+                  {label.text}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

@@ -11,5 +11,12 @@ public enum LockedSpanType {
     MONEY,
     UNIT_NUMBER,
     LARGE_NUMBER,
+    UUID,
+    FILE_PATH,
+    ISSUE_TICKET,
+    VERSION,
+    QUOTED_TEXT,
+    IDENTIFIER,
+    HASH_COMMIT,
     SEMANTIC
 }

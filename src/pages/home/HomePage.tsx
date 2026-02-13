@@ -6,6 +6,8 @@ import type {Persona, Context, ToneLevel} from '@/shared/config/constants';
 import {ResultPanel} from '@/widgets/result-panel';
 import {AnalysisPanel} from '@/widgets/analysis-panel';
 import {CostPanel} from '@/widgets/cost-panel';
+import {QualityReportPanel} from '@/widgets/quality-report-panel';
+import {PipelineTracePanel} from '@/widgets/pipeline-trace-panel';
 import {getTierInfo} from '@/features/transform/api';
 import {streamTransform} from '@/features/transform/stream-api';
 import type {LockedSpanInfo} from '@/features/transform/stream-api';
@@ -78,7 +80,13 @@ export default function HomePage() {
     userPrompt,
     senderInfo,
     transformedText,
-    intermediateAnalysis,
+    labels,
+    pipelineStats,
+    segments,
+    maskedText,
+    relationIntent,
+    processedText,
+    validationIssues,
     isTransforming,
     transformError,
     tierInfo,
@@ -91,7 +99,13 @@ export default function HomePage() {
     setSenderInfo,
     setTransformedText,
     setAnalysisContext,
-    setIntermediateAnalysis,
+    setLabels,
+    setPipelineStats,
+    setSegments,
+    setMaskedText,
+    setRelationIntent,
+    setProcessedText,
+    setValidationIssues,
     setIsTransforming,
     setTransformError,
     setTierInfo,
@@ -101,6 +115,7 @@ export default function HomePage() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isPaidOverride, setIsPaidOverride] = useState(false);
+  const [identityBoosterToggle, setIdentityBoosterToggle] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const rawStreamRef = useRef('');
   const spansRef = useRef<LockedSpanInfo[]>([]);
@@ -156,7 +171,13 @@ export default function HomePage() {
     setTransformError(null);
     setTransformedText('');
     setAnalysisContext(null);
-    setIntermediateAnalysis(null);
+    setLabels(null);
+    setPipelineStats(null);
+    setSegments(null);
+    setMaskedText(null);
+    setRelationIntent(null);
+    setProcessedText(null);
+    setValidationIssues(null);
     setUsageInfo(null);
     rawStreamRef.current = '';
     spansRef.current = [];
@@ -171,12 +192,14 @@ export default function HomePage() {
           ...(tierInfo?.promptEnabled && userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
           ...(senderInfo.trim() ? {senderInfo: senderInfo.trim()} : {}),
           tierOverride: tierInfo?.tier,
+          identityBoosterToggle,
         },
         {
           onSpans: (spans) => {
             spansRef.current = spans;
           },
-          onIntermediate: (data) => setIntermediateAnalysis(data),
+          onLabels: (data) => setLabels(data),
+          onStats: (data) => setPipelineStats(data),
           onDelta: (chunk) => {
             rawStreamRef.current += chunk;
             if (spansRef.current.length > 0) {
@@ -189,7 +212,11 @@ export default function HomePage() {
               setTransformedText(rawStreamRef.current);
             }
           },
-          onAnalysis: (analysis) => setAnalysisContext(analysis),
+          onSegments: (data) => setSegments(data),
+          onMaskedText: (text) => setMaskedText(text),
+          onRelationIntent: (data) => setRelationIntent(data),
+          onProcessedText: (text) => setProcessedText(text),
+          onValidationIssues: (issues) => setValidationIssues(issues),
           onUsage: (usage) => setUsageInfo(usage),
           onDone: (fullText) => setTransformedText(fullText),
           onError: (message) => setTransformError(message),
@@ -339,6 +366,24 @@ export default function HomePage() {
           </p>
         </div>
       </section>
+
+      {/* Identity Booster Toggle */}
+      <section className="mt-8 lg:mt-10">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-text-secondary">고유명사 보호 강화</h3>
+            <p className="text-xs text-text-secondary/60 mt-0.5">인명, 회사명 등 고유 표현 보호</p>
+          </div>
+          <button
+            onClick={() => setIdentityBoosterToggle(!identityBoosterToggle)}
+            className="flex items-center cursor-pointer"
+          >
+            <div className={`relative w-8 h-[18px] rounded-full transition-colors ${identityBoosterToggle ? 'bg-accent' : 'bg-border'}`}>
+              <div className={`absolute top-[3px] w-3 h-3 rounded-full bg-white shadow transition-transform ${identityBoosterToggle ? 'translate-x-[14px]' : 'translate-x-[3px]'}`} />
+            </div>
+          </button>
+        </div>
+      </section>
     </>
   );
 
@@ -373,7 +418,17 @@ export default function HomePage() {
         <section className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
           <article className="mx-auto max-w-2xl space-y-4">
             <ResultPanel />
-            <AnalysisPanel intermediateAnalysis={intermediateAnalysis} />
+            <AnalysisPanel labels={labels} />
+            <PipelineTracePanel
+              spans={spansRef.current.length > 0 ? spansRef.current : null}
+              segments={segments}
+              maskedText={maskedText}
+              relationIntent={relationIntent}
+              relationIntentFired={pipelineStats?.relationIntentFired ?? false}
+              processedText={processedText}
+              validationIssues={validationIssues}
+            />
+            {pipelineStats && <QualityReportPanel stats={pipelineStats} />}
             {usageInfo && <CostPanel usageInfo={usageInfo} />}
 
             {/* Selection summary chips */}

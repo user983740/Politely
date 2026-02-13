@@ -5,8 +5,8 @@ import com.politeai.domain.transform.model.*;
 import com.politeai.domain.transform.service.TransformService;
 import com.politeai.domain.user.model.UserTier;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline;
-import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.MultiModelPipelineResult;
-import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.SharedAnalysisResult;
+import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.AnalysisPhaseResult;
+import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.PipelineResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,7 +32,7 @@ public class TransformAppService {
     private String model;
 
     /**
-     * Full transform via multi-model pipeline (preprocess → 3 analysis → final → unmask → validate).
+     * Full transform via multi-model pipeline (v2: preprocess → segment → label → redact → final → unmask → validate).
      */
     public TransformResult transform(Persona persona,
                                      List<SituationContext> contexts,
@@ -43,10 +43,10 @@ public class TransformAppService {
                                      UserTier tier) {
         validateTransformRequest(originalText, userPrompt, tier);
 
-        SharedAnalysisResult analysis = multiModelPipeline.executeSharedAnalysis(
-                persona, contexts, toneLevel, originalText, userPrompt, senderInfo);
+        AnalysisPhaseResult analysis = multiModelPipeline.executeAnalysis(
+                persona, contexts, toneLevel, originalText, userPrompt, senderInfo, false);
 
-        MultiModelPipelineResult result = multiModelPipeline.executeFinal(
+        PipelineResult result = multiModelPipeline.executeFinal(
                 model, analysis, persona, contexts, toneLevel, originalText, senderInfo);
 
         return new TransformResult(result.transformedText(), null);

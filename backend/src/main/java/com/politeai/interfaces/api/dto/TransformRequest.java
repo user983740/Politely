@@ -30,5 +30,7 @@ public record TransformRequest(
         @Size(max = 100, message = "Sender info must not exceed 100 characters")
         String senderInfo,
 
-        String tierOverride
+        String tierOverride,
+
+        Boolean identityBoosterToggle
 ) {}

@@ -10,9 +10,3 @@ export interface TierInfo {
 export function getTierInfo(): Promise<TierInfo> {
   return apiClient.get('/v1/transform/tier');
 }
-
-export interface IntermediateAnalysis {
-  model1Output: string;
-  model2Output: string;
-  model4Output: string;
-}
