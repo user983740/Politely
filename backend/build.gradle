@@ -41,9 +41,8 @@ dependencies {
 	// OpenAI
 	implementation 'com.openai:openai-java:4.20.0'
 
-	// AWS SES (production email)
-	implementation platform('software.amazon.awssdk:bom:2.29.45')
-	implementation 'software.amazon.awssdk:ses'
+	// Resend (production email)
+	implementation 'com.resend:resend-java:4.11.0'
 
 	// Database
 	runtimeOnly 'com.h2database:h2'
