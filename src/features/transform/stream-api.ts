@@ -83,6 +83,20 @@ export interface UsageInfo {
   };
 }
 
+export type PipelinePhase =
+  | 'normalizing'
+  | 'extracting'
+  | 'identity_boosting'
+  | 'identity_skipped'
+  | 'segmenting'
+  | 'labeling'
+  | 'relation_analyzing'
+  | 'relation_skipped'
+  | 'redacting'
+  | 'generating'
+  | 'validating'
+  | 'complete';
+
 export interface StreamCallbacks {
   onDelta?: (chunk: string) => void;
   onLabels?: (labels: LabelData[]) => void;
@@ -96,6 +110,7 @@ export interface StreamCallbacks {
   onRelationIntent?: (data: RelationIntentData) => void;
   onProcessedText?: (text: string) => void;
   onValidationIssues?: (issues: ValidationIssueData[]) => void;
+  onPhase?: (phase: PipelinePhase) => void;
 }
 
 function getHeaders(): HeadersInit {
@@ -249,6 +264,9 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
       } catch {
         // ignore parse error
       }
+      break;
+    case 'phase':
+      callbacks.onPhase?.(data as PipelinePhase);
       break;
   }
 }

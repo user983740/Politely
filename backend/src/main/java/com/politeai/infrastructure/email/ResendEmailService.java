@@ -11,7 +11,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 @Service
-@Profile("prod")
+@Profile("prod | resend")
 @RequiredArgsConstructor
 @Slf4j
 public class ResendEmailService implements EmailService {

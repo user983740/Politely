@@ -75,7 +75,8 @@ class OutputValidatorTest {
     class HallucinatedFactTests {
         @Test
         void 원문에_없는_숫자는_WARNING() {
-            ValidationResult result = validate("2025년 3월 15일에 만나요", "만나요", Persona.BOSS);
+            // 3자리 이상 숫자 (150000원 등)만 감지 — "2025년" 같은 연도 패턴은 safe context로 허용
+            ValidationResult result = validate("금액이 150000원입니다", "만나요", Persona.BOSS);
             assertThat(result.warnings()).anyMatch(i -> i.type() == ValidationIssueType.HALLUCINATED_FACT);
         }
 

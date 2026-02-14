@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 @Service
-@Profile("!prod")
+@Profile("!prod & !resend")
 @Slf4j
 public class ConsoleEmailService implements EmailService {
 

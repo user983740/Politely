@@ -80,9 +80,9 @@ public class LockedSpanExtractor {
                     Pattern.compile("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
                     LockedSpanType.UUID
             ),
-            // 12. File path / filename with extension
+            // 12. File path / filename with extension (case-insensitive)
             new PatternEntry(
-                    Pattern.compile("(?:[\\w./\\\\-]+/)?[\\w.-]+\\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|md|json|xml|yaml|yml|html|css|js|ts|tsx|jsx|java|py|rb|go|rs|cpp|c|h|hpp|sh|bat|sql|log|zip|tar|gz|rar|7z|png|jpg|jpeg|gif|svg|mp4|mp3|wav|avi)\\b"),
+                    Pattern.compile("(?:[\\w./\\\\-]+/)?[\\w.-]+\\.(?:pdf|doc|docx|xls|xlsx|ppt|pptx|csv|txt|md|json|xml|yaml|yml|html|css|js|ts|tsx|jsx|java|py|rb|go|rs|cpp|c|h|hpp|sh|bat|sql|log|zip|tar|gz|rar|7z|png|jpg|jpeg|gif|svg|mp4|mp3|wav|avi|exe|app|msi|dmg|apk|ipa|iso|img|bak|cfg|ini|env|toml|lock|pid)\\b", Pattern.CASE_INSENSITIVE),
                     LockedSpanType.FILE_PATH
             ),
             // 13. Issue/ticket references (#123, JIRA-456)
@@ -95,9 +95,9 @@ public class LockedSpanExtractor {
                     Pattern.compile("v?\\d{1,4}\\.\\d{1,4}(?:\\.\\d{1,4})?"),
                     LockedSpanType.VERSION
             ),
-            // 15. Quoted text (2-60 chars inside quotes)
+            // 15. Quoted text (2-60 chars inside matched quotes — same type open/close)
             new PatternEntry(
-                    Pattern.compile("[\"'\u201C\u201D\u2018\u2019]([^\"'\u201C\u201D\u2018\u2019]{2,60})[\"'\u201C\u201D\u2018\u2019]"),
+                    Pattern.compile("\"([^\"]{2,60})\"|'([^']{2,60})'|\u201C([^\u201C\u201D]{2,60})\u201D|\u2018([^\u2018\u2019]{2,60})\u2019"),
                     LockedSpanType.QUOTED_TEXT
             ),
             // 16. Identifiers: camelCase, snake_case, PascalCase (>=4 chars), fn()

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
 import type { TierInfo } from '@/features/transform/api';
-import type { LabelData, StatsData, UsageInfo, SegmentData, RelationIntentData, ValidationIssueData } from '@/features/transform/stream-api';
+import type { LabelData, StatsData, UsageInfo, SegmentData, RelationIntentData, ValidationIssueData, PipelinePhase } from '@/features/transform/stream-api';
 
 interface TransformState {
   persona: Persona | null;
@@ -19,6 +19,7 @@ interface TransformState {
   relationIntent: RelationIntentData | null;
   processedText: string | null;
   validationIssues: ValidationIssueData[] | null;
+  currentPhase: PipelinePhase | null;
   isTransforming: boolean;
   transformError: string | null;
   tierInfo: TierInfo | null;
@@ -39,6 +40,7 @@ interface TransformState {
   setRelationIntent: (data: RelationIntentData | null) => void;
   setProcessedText: (text: string | null) => void;
   setValidationIssues: (issues: ValidationIssueData[] | null) => void;
+  setCurrentPhase: (phase: PipelinePhase | null) => void;
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
   setTierInfo: (info: TierInfo) => void;
@@ -63,6 +65,7 @@ const initialState = {
   relationIntent: null as RelationIntentData | null,
   processedText: null as string | null,
   validationIssues: null as ValidationIssueData[] | null,
+  currentPhase: null as PipelinePhase | null,
   isTransforming: false,
   transformError: null as string | null,
   tierInfo: null as TierInfo | null,
@@ -93,11 +96,12 @@ export const useTransformStore = create<TransformState>((set) => ({
   setRelationIntent: (relationIntent) => set({ relationIntent }),
   setProcessedText: (processedText) => set({ processedText }),
   setValidationIssues: (validationIssues) => set({ validationIssues }),
+  setCurrentPhase: (currentPhase) => set({ currentPhase }),
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
   setTierInfo: (tierInfo) => set({ tierInfo }),
   setUsageInfo: (usageInfo) => set({ usageInfo }),
   resetForNewInput: () =>
-    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, relationIntent: null, processedText: null, validationIssues: null, transformError: null, usageInfo: null }),
+    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, relationIntent: null, processedText: null, validationIssues: null, currentPhase: null, transformError: null, usageInfo: null }),
   reset: () => set(initialState),
 }));

@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
 @Component
 public class OutputValidator {
 
-    // Rule 1: Emoji detection (Unicode emoji ranges)
+    // Rule 1: Emoji detection (Unicode emoji ranges + skin tone modifiers + ZWJ sequences)
     private static final Pattern EMOJI_PATTERN = Pattern.compile(
             "[\\x{1F600}-\\x{1F64F}" +  // Emoticons
             "\\x{1F300}-\\x{1F5FF}" +    // Misc Symbols and Pictographs
@@ -28,6 +28,8 @@ public class OutputValidator {
             "\\x{1F1E0}-\\x{1F1FF}" +    // Flags
             "\\x{2702}-\\x{27B0}" +      // Dingbats
             "\\x{FE00}-\\x{FE0F}" +      // Variation Selectors
+            "\\x{1F3FB}-\\x{1F3FF}" +    // Skin tone modifiers
+            "\\x{200D}" +                // Zero-Width Joiner (ZWJ emoji sequences)
             "\\x{1F900}-\\x{1F9FF}" +    // Supplemental Symbols
             "\\x{1FA00}-\\x{1FA6F}" +    // Chess Symbols
             "\\x{1FA70}-\\x{1FAFF}" +    // Symbols Extended-A
@@ -80,13 +82,20 @@ public class OutputValidator {
     private static final Pattern DEURIGET_PATTERN = Pattern.compile("드리겠습니다");
 
     // Rule 6: Perspective error hints (receiver-perspective phrases)
+    // These are phrases typically used by the receiver (service provider), not the sender.
     private static final List<String> PERSPECTIVE_PHRASES = List.of(
             "확인해 드리겠습니다",
             "접수되었습니다",
             "처리해 드리겠습니다",
             "안내해 드리겠습니다",
             "도와드리겠습니다",
-            "답변드리겠습니다"
+            "답변드리겠습니다",
+            "알려드리겠습니다",
+            "연락드리겠습니다",
+            "보내드리겠습니다",
+            "전달드리겠습니다",
+            "안내 드리겠습니다",
+            "처리 드리겠습니다"
     );
 
     /**
@@ -168,26 +177,60 @@ public class OutputValidator {
     }
 
     // Rule 3: Hallucinated facts (new numbers/dates not in input)
+    // Allowlist: common number patterns that LLMs legitimately generate
+    private static final Pattern SAFE_NUMBER_CONTEXT = Pattern.compile(
+            "\\d{2,4}년|제\\d+|\\d+호|\\d+층|\\d+차|\\d+번째"
+    );
+
+    // Korean spelled-out large numbers that could be hallucinated
+    private static final Pattern KOREAN_NUMBER_PATTERN = Pattern.compile(
+            "(?:약\\s*)?(?:\\d+)?(?:십|백|천|만|억|조)\\s*(?:십|백|천|만|억|조)?\\s*(?:원|명|개|건|일|시간|분|배)"
+    );
+
     private void checkHallucinatedFacts(String output, String originalText,
                                         List<LockedSpan> spans, List<ValidationIssue> issues) {
-        // Extract number-like patterns from output
-        Pattern numberPattern = Pattern.compile("\\d{2,}");
+        // Check 1: Numeric patterns (3+ digits)
+        Pattern numberPattern = Pattern.compile("\\d{3,}");
         Matcher matcher = numberPattern.matcher(output);
 
         while (matcher.find()) {
             String found = matcher.group();
-            // Check if this number exists in the original text or locked spans
+
+            // Skip if the number exists in original text or locked spans
             boolean existsInOriginal = originalText.contains(found);
             boolean existsInSpans = spans != null && spans.stream()
                     .anyMatch(s -> s.originalText().contains(found));
+            if (existsInOriginal || existsInSpans) continue;
 
-            if (!existsInOriginal && !existsInSpans) {
-                issues.add(new ValidationIssue(
-                        ValidationIssueType.HALLUCINATED_FACT,
-                        Severity.WARNING,
-                        "원문에 없는 숫자/날짜 감지: \"" + found + "\"",
-                        found
-                ));
+            // Skip safe contextual patterns (e.g., years like "2024년")
+            int contextStart = Math.max(0, matcher.start() - 2);
+            int contextEnd = Math.min(output.length(), matcher.end() + 3);
+            String context = output.substring(contextStart, contextEnd);
+            if (SAFE_NUMBER_CONTEXT.matcher(context).find()) continue;
+
+            issues.add(new ValidationIssue(
+                    ValidationIssueType.HALLUCINATED_FACT,
+                    Severity.WARNING,
+                    "원문에 없는 숫자/날짜 감지: \"" + found + "\"",
+                    found
+            ));
+        }
+
+        // Check 2: Korean spelled-out numbers (백만원, 십만명 etc.)
+        Matcher koreanMatcher = KOREAN_NUMBER_PATTERN.matcher(output);
+        while (koreanMatcher.find()) {
+            String found = koreanMatcher.group();
+            if (!originalText.contains(found)) {
+                // Check if any substantial substring exists in original
+                String core = found.replaceAll("\\s+", "").replaceAll("^약", "");
+                if (!originalText.replace(" ", "").contains(core)) {
+                    issues.add(new ValidationIssue(
+                            ValidationIssueType.HALLUCINATED_FACT,
+                            Severity.WARNING,
+                            "원문에 없는 한국어 수량 표현 감지: \"" + found + "\"",
+                            found
+                    ));
+                }
             }
         }
     }
@@ -229,6 +272,8 @@ public class OutputValidator {
     }
 
     // Rule 5: Length overexpansion
+    private static final int MAX_ABSOLUTE_OUTPUT_LENGTH = 4000;
+
     private void checkLengthOverexpansion(String output, String originalText, List<ValidationIssue> issues) {
         if (originalText.length() >= 20 && output.length() > originalText.length() * 3) {
             issues.add(new ValidationIssue(
@@ -237,6 +282,17 @@ public class OutputValidator {
                     String.format("출력 길이 과확장: 입력 %d자 → 출력 %d자 (%.1f배)",
                             originalText.length(), output.length(),
                             (double) output.length() / originalText.length()),
+                    null
+            ));
+        }
+
+        // Absolute cap regardless of input size
+        if (output.length() > MAX_ABSOLUTE_OUTPUT_LENGTH) {
+            issues.add(new ValidationIssue(
+                    ValidationIssueType.LENGTH_OVEREXPANSION,
+                    Severity.WARNING,
+                    String.format("출력 길이 절대 상한 초과: %d자 (상한: %d자)",
+                            output.length(), MAX_ABSOLUTE_OUTPUT_LENGTH),
                     null
             ));
         }

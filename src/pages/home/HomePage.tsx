@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {useAuthStore, useTransformStore} from '@/shared/store';
+import {useNavigate} from 'react-router-dom';
 import {PERSONAS, CONTEXTS, MAX_PROMPT_LENGTH, MAX_SENDER_INFO_LENGTH} from '@/shared/config/constants';
 import type {Persona, Context, ToneLevel} from '@/shared/config/constants';
 import {ResultPanel} from '@/widgets/result-panel';
@@ -71,7 +72,8 @@ const PERSONA_ICONS: Record<string, React.ReactNode> = {
 };
 
 export default function HomePage() {
-  const {isLoggedIn, loginId, name} = useAuthStore();
+  const {isLoggedIn, loginId, name, setLoggedOut} = useAuthStore();
+  const navigate = useNavigate();
   const {
     persona,
     contexts,
@@ -106,6 +108,8 @@ export default function HomePage() {
     setRelationIntent,
     setProcessedText,
     setValidationIssues,
+    currentPhase,
+    setCurrentPhase,
     setIsTransforming,
     setTransformError,
     setTierInfo,
@@ -178,6 +182,7 @@ export default function HomePage() {
     setRelationIntent(null);
     setProcessedText(null);
     setValidationIssues(null);
+    setCurrentPhase(null);
     setUsageInfo(null);
     rawStreamRef.current = '';
     spansRef.current = [];
@@ -217,6 +222,7 @@ export default function HomePage() {
           onRelationIntent: (data) => setRelationIntent(data),
           onProcessedText: (text) => setProcessedText(text),
           onValidationIssues: (issues) => setValidationIssues(issues),
+          onPhase: (phase) => setCurrentPhase(phase),
           onUsage: (usage) => setUsageInfo(usage),
           onDone: (fullText) => setTransformedText(fullText),
           onError: (message) => setTransformError(message),
@@ -402,32 +408,45 @@ export default function HomePage() {
             />
             <span className="text-base sm:text-lg font-bold text-text">Politely</span>
           </div>
-          <button
-            onClick={resetForNewInput}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-text border border-border/60 rounded-xl hover:bg-surface transition-colors cursor-pointer"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="1 4 1 10 7 10" />
-              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-            </svg>
-            새로 입력하기
-          </button>
+          <div className="flex items-center gap-2">
+            {isLoggedIn && (
+              <button
+                onClick={() => { setLoggedOut(); navigate('/'); }}
+                className="px-3 py-2 text-sm text-text-secondary border border-border/60 rounded-xl hover:text-text hover:border-border transition-colors cursor-pointer"
+              >
+                로그아웃
+              </button>
+            )}
+            <button
+              onClick={resetForNewInput}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-text border border-border/60 rounded-xl hover:bg-surface transition-colors cursor-pointer"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+              새로 입력하기
+            </button>
+          </div>
         </header>
 
         {/* Result content centered */}
         <section className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
           <article className="mx-auto max-w-2xl space-y-4">
-            <ResultPanel />
-            <AnalysisPanel labels={labels} />
             <PipelineTracePanel
+              currentPhase={currentPhase}
+              isTransforming={isTransforming}
               spans={spansRef.current.length > 0 ? spansRef.current : null}
               segments={segments}
               maskedText={maskedText}
+              labels={labels}
               relationIntent={relationIntent}
-              relationIntentFired={pipelineStats?.relationIntentFired ?? false}
               processedText={processedText}
               validationIssues={validationIssues}
+              transformedText={transformedText}
             />
+            <ResultPanel />
+            <AnalysisPanel labels={labels} />
             {pipelineStats && <QualityReportPanel stats={pipelineStats} />}
             {usageInfo && <CostPanel usageInfo={usageInfo} />}
 
@@ -490,24 +509,15 @@ export default function HomePage() {
           </button>
           {isLoggedIn ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-full bg-white border border-border/60 flex items-center justify-center">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className="text-text-secondary"
-                  aria-hidden="true"
-                >
-                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                  <circle cx="12" cy="7" r="4" />
-                </svg>
-              </div>
-              <span className="text-sm font-medium text-text">
+              <span className="text-sm font-medium text-text truncate max-w-24">
                 {name || loginId}
               </span>
+              <button
+                onClick={() => { setLoggedOut(); navigate('/'); }}
+                className="px-2.5 py-1 text-xs text-text-secondary border border-border/60 rounded-lg hover:text-text hover:border-border transition-colors cursor-pointer"
+              >
+                로그아웃
+              </button>
             </div>
           ) : (
             <Link
@@ -613,7 +623,14 @@ export default function HomePage() {
                 {isPaidOverride ? 'Premium' : 'Free Tier'}
               </p>
             </div>
-            {!isLoggedIn && (
+            {isLoggedIn ? (
+              <button
+                onClick={() => { setLoggedOut(); navigate('/'); }}
+                className="px-3 py-1.5 text-xs text-text-secondary border border-border/60 rounded-lg hover:text-text hover:border-border transition-colors cursor-pointer shrink-0"
+              >
+                로그아웃
+              </button>
+            ) : (
               <Link
                 to="/login"
                 className="px-4 py-1.5 text-xs font-semibold text-accent border border-accent/40 rounded-lg hover:bg-accent hover:text-white transition-colors"

@@ -65,17 +65,25 @@ public class LockedSpanMasker {
             return new UnmaskResult(output, List.of());
         }
 
-        String result = output;
-        boolean[] restored = new boolean[spans.size()];
+        // Build index→span map for safe lookup (handles reindexing correctly)
+        java.util.Map<Integer, LockedSpan> spanMap = new java.util.HashMap<>();
+        java.util.Set<Integer> restored = new java.util.HashSet<>();
+        for (LockedSpan span : spans) {
+            spanMap.put(span.index(), span);
+        }
 
         // Replace all placeholders found in the output
+        String result = output;
         Matcher matcher = PLACEHOLDER_PATTERN.matcher(result);
         StringBuilder sb = new StringBuilder();
         while (matcher.find()) {
             int index = Integer.parseInt(matcher.group(1));
-            if (index >= 0 && index < spans.size()) {
-                matcher.appendReplacement(sb, Matcher.quoteReplacement(spans.get(index).originalText()));
-                restored[index] = true;
+            LockedSpan span = spanMap.get(index);
+            if (span != null) {
+                matcher.appendReplacement(sb, Matcher.quoteReplacement(span.originalText()));
+                restored.add(index);
+            } else {
+                log.warn("LockedSpan placeholder index {} not found in span map (possible stale index after reindexing)", index);
             }
         }
         matcher.appendTail(sb);
@@ -83,9 +91,8 @@ public class LockedSpanMasker {
 
         // Check for missing spans
         List<LockedSpan> missingSpans = new java.util.ArrayList<>();
-        for (int i = 0; i < spans.size(); i++) {
-            if (!restored[i]) {
-                LockedSpan span = spans.get(i);
+        for (LockedSpan span : spans) {
+            if (!restored.contains(span.index())) {
                 log.warn("LockedSpan missing in output: index={}, type={}, text='{}'",
                         span.index(), span.type(), span.originalText());
 
@@ -93,7 +100,7 @@ public class LockedSpanMasker {
                 if (!result.contains(span.originalText())) {
                     missingSpans.add(span);
                 } else {
-                    log.info("LockedSpan {} found as verbatim text in output (LLM preserved without placeholder)", i);
+                    log.info("LockedSpan {} found as verbatim text in output (LLM preserved without placeholder)", span.index());
                 }
             }
         }

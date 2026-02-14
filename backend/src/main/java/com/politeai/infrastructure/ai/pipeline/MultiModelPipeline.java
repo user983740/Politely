@@ -33,6 +33,30 @@ import java.util.concurrent.CompletableFuture;
 @RequiredArgsConstructor
 public class MultiModelPipeline {
 
+    /**
+     * Callback for reporting pipeline progress during analysis.
+     * Used by streaming service to send real-time SSE events.
+     */
+    public interface PipelineProgressCallback {
+        void onPhase(String phase) throws Exception;
+        void onSpansExtracted(List<LockedSpan> spans, String maskedText) throws Exception;
+        void onSegmented(List<Segment> segments) throws Exception;
+        void onLabeled(List<LabeledSegment> labeledSegments) throws Exception;
+        void onRelationIntent(boolean fired, RelationIntentService.RelationIntentResult result) throws Exception;
+        void onRedacted(String processedText) throws Exception;
+
+        static PipelineProgressCallback noop() {
+            return new PipelineProgressCallback() {
+                @Override public void onPhase(String phase) {}
+                @Override public void onSpansExtracted(List<LockedSpan> spans, String maskedText) {}
+                @Override public void onSegmented(List<Segment> segments) {}
+                @Override public void onLabeled(List<LabeledSegment> labeledSegments) {}
+                @Override public void onRelationIntent(boolean fired, RelationIntentService.RelationIntentResult result) {}
+                @Override public void onRedacted(String processedText) {}
+            };
+        }
+    }
+
     private final TextNormalizer textNormalizer;
     private final LockedSpanExtractor spanExtractor;
     private final LockedSpanMasker spanMasker;
@@ -84,7 +108,7 @@ public class MultiModelPipeline {
     ) {}
 
     /**
-     * Run the analysis phase: preprocess → segment → label → gating → redact.
+     * Run the analysis phase (non-streaming, no progress callback).
      */
     public AnalysisPhaseResult executeAnalysis(Persona persona,
                                                 List<SituationContext> contexts,
@@ -93,12 +117,35 @@ public class MultiModelPipeline {
                                                 String userPrompt,
                                                 String senderInfo,
                                                 boolean identityBoosterToggle) {
+        try {
+            return executeAnalysis(persona, contexts, toneLevel, originalText,
+                    userPrompt, senderInfo, identityBoosterToggle, PipelineProgressCallback.noop());
+        } catch (Exception e) {
+            throw new RuntimeException("Pipeline analysis failed", e);
+        }
+    }
+
+    /**
+     * Run the analysis phase with progress callback: preprocess → segment → label → gating → redact.
+     * Each step reports progress via the callback for real-time SSE streaming.
+     */
+    public AnalysisPhaseResult executeAnalysis(Persona persona,
+                                                List<SituationContext> contexts,
+                                                ToneLevel toneLevel,
+                                                String originalText,
+                                                String userPrompt,
+                                                String senderInfo,
+                                                boolean identityBoosterToggle,
+                                                PipelineProgressCallback callback) throws Exception {
         // A) Normalize
+        callback.onPhase("normalizing");
         String normalized = textNormalizer.normalize(originalText);
 
         // B) Extract regex locked spans + mask
+        callback.onPhase("extracting");
         List<LockedSpan> regexSpans = spanExtractor.extract(normalized);
         String masked = spanMasker.mask(normalized, regexSpans);
+        callback.onSpansExtracted(regexSpans, masked);
 
         if (!regexSpans.isEmpty()) {
             log.info("[Pipeline] Extracted {} regex locked spans", regexSpans.size());
@@ -113,34 +160,49 @@ public class MultiModelPipeline {
         // E?) Identity Booster (gating — before segmentation so new spans are included)
         List<LockedSpan> allSpans = regexSpans;
         if (gatingEvaluator.shouldFireIdentityBooster(identityBoosterToggle, persona, regexSpans, normalized.length())) {
+            callback.onPhase("identity_boosting");
             IdentityLockBooster.BoosterResult boostResult = identityLockBooster.boost(persona, normalized, regexSpans, masked);
             allSpans = boostResult.allSpans();
             masked = boostResult.remaskedText();
             totalPromptTokens += boostResult.promptTokens();
             totalCompletionTokens += boostResult.completionTokens();
             boosterFired = true;
+            callback.onSpansExtracted(allSpans, masked); // Re-send updated spans
+        } else {
+            callback.onPhase("identity_skipped");
         }
 
         // C) Segment (server-side, no LLM)
+        callback.onPhase("segmenting");
         List<Segment> segments = meaningSegmenter.segment(masked);
+        callback.onSegmented(segments);
 
         // D) Structure Label (LLM #1)
+        callback.onPhase("labeling");
         StructureLabelService.StructureLabelResult labelResult = structureLabelService.label(
                 persona, contexts, toneLevel, userPrompt, senderInfo, segments, masked);
         totalPromptTokens += labelResult.promptTokens();
         totalCompletionTokens += labelResult.completionTokens();
+        callback.onLabeled(labelResult.labeledSegments());
 
         // F?) Relation/Intent (gating)
         RelationIntentService.RelationIntentResult relationResult = null;
         if (gatingEvaluator.shouldFireRelationIntent(persona, normalized)) {
+            callback.onPhase("relation_analyzing");
             relationResult = relationIntentService.analyze(persona, contexts, toneLevel, masked, userPrompt, senderInfo);
             totalPromptTokens += relationResult.promptTokens();
             totalCompletionTokens += relationResult.completionTokens();
             relationFired = true;
+            callback.onRelationIntent(true, relationResult);
+        } else {
+            callback.onPhase("relation_skipped");
+            callback.onRelationIntent(false, null);
         }
 
-        // G) Redact (server enforcement)
-        RedactionService.RedactionResult redaction = redactionService.process(masked, labelResult.labeledSegments());
+        // G) Redact (server enforcement — position-based replacement)
+        callback.onPhase("redacting");
+        RedactionService.RedactionResult redaction = redactionService.process(masked, labelResult.labeledSegments(), segments);
+        callback.onRedacted(redaction.processedText());
 
         // Count tiers
         int greenCount = (int) labelResult.labeledSegments().stream()

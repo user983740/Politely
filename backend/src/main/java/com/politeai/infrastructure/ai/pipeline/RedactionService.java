@@ -1,14 +1,13 @@
 package com.politeai.infrastructure.ai.pipeline;
 
 import com.politeai.domain.transform.model.LabeledSegment;
+import com.politeai.domain.transform.model.Segment;
 import com.politeai.domain.transform.model.SegmentLabel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Server-side enforcement of the 3-tier label system.
@@ -16,6 +15,8 @@ import java.util.Map;
  * - RED segments → replaced with [REDACTED:LABEL_N] markers. Model never sees original.
  * - YELLOW segments → wrapped with [SOFTEN: original] markers. Model sees original but gets instructions to soften.
  * - GREEN segments → left as-is. Model only adjusts style.
+ *
+ * Uses position-based replacement (right-to-left) to avoid duplicate-text mis-replacement.
  */
 @Slf4j
 @Component
@@ -29,42 +30,59 @@ public class RedactionService {
     ) {}
 
     /**
-     * Process the masked text according to labeled segments.
+     * Process the masked text according to labeled segments using position-based replacement.
      *
      * @param maskedText      the text with {{LOCKED_N}} placeholders
      * @param labeledSegments the labeled segments from StructureLabelService
+     * @param segments        the original segments from MeaningSegmenter (with start/end positions)
      * @return processed text with RED=REDACTED, YELLOW=SOFTEN markers, GREEN=unchanged
      */
-    public RedactionResult process(String maskedText, List<LabeledSegment> labeledSegments) {
-        String processedText = maskedText;
+    public RedactionResult process(String maskedText, List<LabeledSegment> labeledSegments, List<Segment> segments) {
         Map<String, String> redactionMap = new LinkedHashMap<>();
         Map<SegmentLabel, Integer> redCounters = new HashMap<>();
         int redCount = 0;
         int yellowCount = 0;
 
-        // Sort segments by text length descending to avoid partial replacements
+        // Build segment position lookup by ID
+        Map<String, Segment> segmentMap = segments.stream()
+                .collect(Collectors.toMap(Segment::id, s -> s, (a, b) -> a));
+
+        // Sort labeled segments by position descending (right-to-left) for safe StringBuilder replacement
         List<LabeledSegment> sorted = labeledSegments.stream()
-                .sorted((a, b) -> Integer.compare(b.text().length(), a.text().length()))
+                .filter(ls -> segmentMap.containsKey(ls.segmentId()))
+                .sorted((a, b) -> {
+                    Segment sa = segmentMap.get(a.segmentId());
+                    Segment sb = segmentMap.get(b.segmentId());
+                    return Integer.compare(sb.start(), sa.start());
+                })
                 .toList();
 
-        for (LabeledSegment seg : sorted) {
-            SegmentLabel.Tier tier = seg.label().tier();
+        StringBuilder sb = new StringBuilder(maskedText);
+
+        for (LabeledSegment ls : sorted) {
+            Segment seg = segmentMap.get(ls.segmentId());
+            int start = seg.start();
+            int end = seg.end();
+            SegmentLabel.Tier tier = ls.label().tier();
+
+            // Safety: verify position is within bounds
+            if (start < 0 || end > sb.length() || start >= end) {
+                log.warn("[Redaction] Out-of-bounds position for {}: start={}, end={}, textLen={}",
+                        ls.segmentId(), start, end, sb.length());
+                continue;
+            }
 
             switch (tier) {
                 case RED -> {
-                    int count = redCounters.merge(seg.label(), 1, Integer::sum);
-                    String marker = "[REDACTED:" + seg.label().name() + "_" + count + "]";
-                    if (processedText.contains(seg.text())) {
-                        processedText = processedText.replace(seg.text(), marker);
-                        redactionMap.put(marker, seg.text());
-                        redCount++;
-                    }
+                    int count = redCounters.merge(ls.label(), 1, Integer::sum);
+                    String marker = "[REDACTED:" + ls.label().name() + "_" + count + "]";
+                    sb.replace(start, end, marker);
+                    redactionMap.put(marker, seg.text());
+                    redCount++;
                 }
                 case YELLOW -> {
-                    if (processedText.contains(seg.text())) {
-                        processedText = processedText.replace(seg.text(), "[SOFTEN: " + seg.text() + "]");
-                        yellowCount++;
-                    }
+                    sb.replace(start, end, "[SOFTEN: " + seg.text() + "]");
+                    yellowCount++;
                 }
                 case GREEN -> {
                     // No modification — left as-is
@@ -75,6 +93,6 @@ public class RedactionService {
         log.info("[Redaction] RED={}, YELLOW={}, GREEN={}", redCount, yellowCount,
                 labeledSegments.size() - redCount - yellowCount);
 
-        return new RedactionResult(processedText, redCount, yellowCount, redactionMap);
+        return new RedactionResult(sb.toString(), redCount, yellowCount, redactionMap);
     }
 }

@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Optional LLM gating component: extracts semantic locked spans (proper nouns, filenames, etc.)
@@ -99,31 +101,66 @@ public class IdentityLockBooster {
             return result;
         }
 
+        // Collect all existing spans (including newly added ones) for overlap checking
+        List<LockedSpan> allKnownSpans = new ArrayList<>(existingSpans);
+
         int nextIndex = existingSpans.size();
         for (String line : output.split("\n")) {
             line = line.trim();
             if (!line.startsWith("- ")) continue;
 
             String text = line.substring(2).trim();
-            if (text.isBlank()) continue;
+            if (text.isBlank() || text.length() < 2) continue;
 
-            int pos = normalizedText.indexOf(text);
-            if (pos < 0) continue;
+            // Use word-boundary-aware search to avoid partial matches
+            // For Korean: check that char before/after is not a Korean syllable
+            // For ASCII: use standard word boundary
+            Pattern spanPattern = buildWordBoundaryPattern(text);
+            Matcher m = spanPattern.matcher(normalizedText);
 
-            int endPos = pos + text.length();
+            while (m.find()) {
+                int pos = m.start();
+                int endPos = m.end();
 
-            // Check overlap with existing spans
-            boolean overlaps = existingSpans.stream()
-                    .anyMatch(s -> pos < s.endPos() && endPos > s.startPos());
-            if (overlaps) continue;
+                // Check overlap with existing spans and already-added spans
+                final int fPos = pos;
+                final int fEndPos = endPos;
+                boolean overlaps = allKnownSpans.stream()
+                        .anyMatch(s -> fPos < s.endPos() && fEndPos > s.startPos());
+                if (overlaps) continue;
 
-            result.add(new LockedSpan(
-                    nextIndex++, text,
-                    "{{LOCKED_" + (nextIndex - 1) + "}}",
-                    LockedSpanType.SEMANTIC, pos, endPos
-            ));
+                LockedSpan newSpan = new LockedSpan(
+                        nextIndex++, text,
+                        "{{LOCKED_" + (nextIndex - 1) + "}}",
+                        LockedSpanType.SEMANTIC, pos, endPos
+                );
+                result.add(newSpan);
+                allKnownSpans.add(newSpan);
+            }
         }
 
         return result;
+    }
+
+    /**
+     * Build a word-boundary-aware pattern for the given text.
+     * For Korean text: ensures the match is not part of a longer Korean word.
+     * For ASCII text: uses standard \b word boundaries.
+     */
+    private Pattern buildWordBoundaryPattern(String text) {
+        String quoted = Pattern.quote(text);
+        boolean startsWithKorean = isKoreanChar(text.charAt(0));
+        boolean endsWithKorean = isKoreanChar(text.charAt(text.length() - 1));
+
+        String prefix = startsWithKorean ? "(?<![가-힣ㄱ-ㅎㅏ-ㅣ])" : "\\b";
+        String suffix = endsWithKorean ? "(?![가-힣ㄱ-ㅎㅏ-ㅣ])" : "\\b";
+
+        return Pattern.compile(prefix + quoted + suffix);
+    }
+
+    private boolean isKoreanChar(char c) {
+        return (c >= 0xAC00 && c <= 0xD7A3) || // 한글 음절
+               (c >= 0x3131 && c <= 0x314E) || // 자음
+               (c >= 0x314F && c <= 0x3163);   // 모음
     }
 }

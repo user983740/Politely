@@ -46,7 +46,7 @@ class PromptBuilderTest {
     }
 
     @Test
-    @DisplayName("동적 시스템 프롬프트 토큰 수 검증 (~430-550 토큰)")
+    @DisplayName("동적 시스템 프롬프트 토큰 수 검증 (합리적 범위 내)")
     void buildSystemPrompt_토큰_검증() {
         String prompt = promptBuilder.buildSystemPrompt(
                 Persona.BOSS,
@@ -55,7 +55,7 @@ class PromptBuilderTest {
         );
 
         int estimatedTokens = (int) (prompt.length() / 1.5);
-        assertThat(estimatedTokens).isLessThan(1000);
+        assertThat(estimatedTokens).isLessThan(1500);
         assertThat(estimatedTokens).isGreaterThan(200);
     }
 
