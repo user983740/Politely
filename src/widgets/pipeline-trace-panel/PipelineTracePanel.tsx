@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import type {
   LockedSpanInfo,
   SegmentData,
@@ -390,39 +390,35 @@ export default function PipelineTracePanel({
   transformedText,
 }: Props) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
-  const prevPhaseRef = useRef<PipelinePhase | null>(null);
-  const skippedStepsRef = useRef<Set<string>>(new Set());
+  const [skippedSteps, setSkippedSteps] = useState<Set<string>>(new Set());
+  const [prevPhase, setPrevPhase] = useState<PipelinePhase | null>(null);
 
-  // Track skipped steps and auto-expand completed steps
-  useEffect(() => {
-    if (!currentPhase || currentPhase === prevPhaseRef.current) return;
-    prevPhaseRef.current = currentPhase;
+  // Adjust state when currentPhase prop changes (React "state adjustment during render" pattern)
+  if (currentPhase !== null && currentPhase !== prevPhase) {
+    setPrevPhase(currentPhase);
 
-    // Reset skipped tracking on new transform
-    if (currentPhase === 'normalizing') {
-      skippedStepsRef.current = new Set();
-    }
-
-    // Record skip phases
+    // Compute new skipped steps
+    const newSkipped = currentPhase === 'normalizing' ? new Set<string>() : new Set(skippedSteps);
     for (const step of STEPS) {
       if (step.skipPhases?.includes(currentPhase)) {
-        skippedStepsRef.current.add(step.id);
+        newSkipped.add(step.id);
       }
     }
+    setSkippedSteps(newSkipped);
 
-    // When a new phase starts, the PREVIOUS step just completed — auto-expand it
-    const statuses = getStepStatuses(currentPhase, skippedStepsRef.current);
+    // Auto-expand completed steps
+    const statuses = getStepStatuses(currentPhase, newSkipped);
     const completedWithData = new Set<string>();
     statuses.forEach((status, stepId) => {
       if (status === 'completed') completedWithData.add(stepId);
     });
     setExpandedSteps(completedWithData);
-  }, [currentPhase]);
+  }
 
   // After complete, show all expandable
   const isComplete = currentPhase === 'complete' || (!isTransforming && transformedText.length > 0);
 
-  const statuses = getStepStatuses(currentPhase, skippedStepsRef.current);
+  const statuses = getStepStatuses(currentPhase, skippedSteps);
 
   // Determine if we should render at all
   const hasAnyPhase = currentPhase !== null;
