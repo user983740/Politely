@@ -265,7 +265,11 @@ public class AiStreamingTransformService {
 
             } catch (Exception e) {
                 log.error("Streaming transform failed", e);
-                sendError(emitter, "AI 변환 서비스에 일시적인 오류가 발생했습니다.");
+                String detail = e.getMessage();
+                if (e.getCause() != null) {
+                    detail += " | cause: " + e.getCause().getMessage();
+                }
+                sendError(emitter, "AI 변환 서비스 오류: " + detail);
             }
         });
 

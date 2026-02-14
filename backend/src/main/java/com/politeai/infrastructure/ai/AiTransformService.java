@@ -74,7 +74,11 @@ public class AiTransformService {
             throw e;
         } catch (Exception e) {
             log.error("OpenAI API call failed [{}]", modelName, e);
-            throw new AiTransformException("AI 변환 서비스에 일시적인 오류가 발생했습니다.", e);
+            String detail = e.getClass().getSimpleName() + ": " + e.getMessage();
+            if (e.getCause() != null) {
+                detail += " | cause: " + e.getCause().getClass().getSimpleName() + ": " + e.getCause().getMessage();
+            }
+            throw new AiTransformException("AI 변환 서비스 오류 [" + modelName + "]: " + detail, e);
         }
     }
 }
