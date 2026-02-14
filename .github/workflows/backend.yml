@@ -84,17 +84,16 @@ jobs:
 
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: OPENAI_API_KEY
           script: |
             ENV_FILE="/home/${{ secrets.EC2_USERNAME }}/politeai/.env"
             mkdir -p "$(dirname "$ENV_FILE")"
-
-            # Strip OPENAI_API_KEY from .env to avoid corrupted entries from previous deploys
-            grep -v '^OPENAI_API_KEY=' "$ENV_FILE" > /tmp/.env.tmp 2>/dev/null || true
-            mv /tmp/.env.tmp "$ENV_FILE"
 
             aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
             docker pull ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
@@ -105,5 +104,5 @@ jobs:
               --restart unless-stopped \
               -p 8080:8080 \
               --env-file "$ENV_FILE" \
-              -e 'OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}' \
+              -e "OPENAI_API_KEY=${OPENAI_API_KEY}" \
               ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
