@@ -134,7 +134,7 @@ public class OutputValidator {
         checkEndingRepetition(output, issues);
         checkLengthOverexpansion(output, originalText, issues);
         checkPerspectiveError(output, persona, issues);
-        checkLockedSpanMissing(maskedOutput, spans, issues);
+        checkLockedSpanMissing(maskedOutput, output, spans, issues);
         checkRedactedReentry(output, maskedOutput, redactionMap, issues);
 
         boolean passed = issues.stream().noneMatch(i -> i.severity() == Severity.ERROR);
@@ -318,31 +318,43 @@ public class OutputValidator {
     }
 
     // Rule 7: LockedSpan missing in output
-    private void checkLockedSpanMissing(String maskedOutput, List<LockedSpan> spans,
-                                        List<ValidationIssue> issues) {
+    private void checkLockedSpanMissing(String maskedOutput, String unmaskedOutput,
+                                        List<LockedSpan> spans, List<ValidationIssue> issues) {
         if (spans == null || spans.isEmpty() || maskedOutput == null) {
             return;
         }
 
         for (LockedSpan span : spans) {
-            // Check if placeholder exists in the masked output
-            if (!maskedOutput.contains(span.placeholder())) {
-                // Also check flexible pattern
-                Pattern flexible = Pattern.compile(
-                        "\\{\\{\\s*LOCKED[_\\-]?" + span.index() + "\\s*\\}\\}"
-                );
-                if (!flexible.matcher(maskedOutput).find()) {
-                    // Check if original text appears verbatim
-                    if (!maskedOutput.contains(span.originalText())) {
-                        issues.add(new ValidationIssue(
-                                ValidationIssueType.LOCKED_SPAN_MISSING,
-                                Severity.ERROR,
-                                "LockedSpan 누락: " + span.placeholder() + " (\"" + span.originalText() + "\")",
-                                span.placeholder()
-                        ));
-                    }
-                }
+            // Check if placeholder exists in the masked output (raw LLM output)
+            if (maskedOutput.contains(span.placeholder())) {
+                continue;
             }
+
+            // Check flexible placeholder pattern (e.g., {{ LOCKED-0 }})
+            Pattern flexible = Pattern.compile(
+                    "\\{\\{\\s*LOCKED[_\\-]?" + span.index() + "\\s*\\}\\}"
+            );
+            if (flexible.matcher(maskedOutput).find()) {
+                continue;
+            }
+
+            // Check if original text appears in raw LLM output
+            if (maskedOutput.contains(span.originalText())) {
+                continue;
+            }
+
+            // Final fallback: check if original text exists in unmasked output
+            // (covers cases where unmask succeeded via other means)
+            if (unmaskedOutput != null && unmaskedOutput.contains(span.originalText())) {
+                continue;
+            }
+
+            issues.add(new ValidationIssue(
+                    ValidationIssueType.LOCKED_SPAN_MISSING,
+                    Severity.ERROR,
+                    "LockedSpan 누락: " + span.placeholder() + " (\"" + span.originalText() + "\")",
+                    span.placeholder()
+            ));
         }
     }
 

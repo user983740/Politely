@@ -149,6 +149,8 @@ async function streamSSE(
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let currentEvent = '';
+  let currentDataLines: string[] = [];
 
   try {
     while (true) {
@@ -160,9 +162,6 @@ async function streamSSE(
       // Parse SSE events from buffer
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? ''; // Keep incomplete line in buffer
-
-      let currentEvent = '';
-      let currentDataLines: string[] = [];
 
       for (const line of lines) {
         if (line.startsWith('event:')) {
@@ -178,11 +177,11 @@ async function streamSSE(
       }
     }
 
-    // Process any remaining buffer
-    if (buffer.trim()) {
+    // Dispatch any remaining event in buffer
+    if (currentEvent && currentDataLines.length > 0) {
+      dispatchEvent(currentEvent, currentDataLines.join('\n'), callbacks);
+    } else if (buffer.trim()) {
       const remaining = buffer.split('\n');
-      let currentEvent = '';
-      const currentDataLines: string[] = [];
       for (const line of remaining) {
         if (line.startsWith('event:')) {
           currentEvent = line.slice(6).trim();
