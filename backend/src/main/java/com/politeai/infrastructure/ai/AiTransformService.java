@@ -74,11 +74,27 @@ public class AiTransformService {
             throw e;
         } catch (Exception e) {
             log.error("OpenAI API call failed [{}]", modelName, e);
-            String detail = e.getClass().getSimpleName() + ": " + e.getMessage();
-            if (e.getCause() != null) {
-                detail += " | cause: " + e.getCause().getClass().getSimpleName() + ": " + e.getCause().getMessage();
-            }
-            throw new AiTransformException("AI 변환 서비스 오류 [" + modelName + "]: " + detail, e);
+            String errorMsg = classifyApiError(e);
+            throw new AiTransformException(errorMsg, e);
         }
+    }
+
+    private String classifyApiError(Exception e) {
+        String name = e.getClass().getSimpleName();
+        String msg = e.getMessage() != null ? e.getMessage() : "";
+
+        if (name.contains("Unauthorized") || msg.contains("401") || msg.contains("Incorrect API key")) {
+            return "AI 서비스 인증 오류: API 키가 유효하지 않습니다. 서버 설정을 확인해주세요.";
+        }
+        if (name.contains("RateLimit") || msg.contains("429") || msg.contains("rate limit")) {
+            return "AI 서비스 요청 한도 초과: 잠시 후 다시 시도해주세요.";
+        }
+        if (name.contains("Timeout") || msg.contains("timeout") || msg.contains("timed out")) {
+            return "AI 서비스 응답 시간 초과: 잠시 후 다시 시도해주세요.";
+        }
+        if (name.contains("Connect") || msg.contains("connect") || msg.contains("network")) {
+            return "AI 서비스 연결 실패: 네트워크 상태를 확인해주세요.";
+        }
+        return "AI 변환 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
     }
 }

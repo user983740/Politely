@@ -212,11 +212,7 @@ export default function HomePage() {
           : null;
 
       if (apiErr) {
-        if (apiErr.code === 'AI_TRANSFORM_ERROR') {
-          setTransformError('AI 변환 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
-        } else {
-          setTransformError(apiErr.message);
-        }
+        setTransformError(apiErr.message);
       } else {
         console.error('Transform error:', err);
         setTransformError('네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.');
