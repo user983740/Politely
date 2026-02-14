@@ -22,13 +22,13 @@ class LockedSpanMaskerTest {
     }
 
     @Test
-    @DisplayName("mask: 스팬을 플레이스홀더로 교체")
+    @DisplayName("mask: 스팬을 타입별 플레이스홀더로 교체")
     void mask_기본() {
         String text = "2024년 2월 4일에 만나요";
         List<LockedSpan> spans = extractor.extract(text);
 
         String masked = masker.mask(text, spans);
-        assertThat(masked).contains("{{LOCKED_0}}");
+        assertThat(masked).contains("{{DATE_1}}");
         assertThat(masked).doesNotContain("2024년 2월 4일");
         assertThat(masked).contains("에 만나요");
     }
@@ -55,13 +55,13 @@ class LockedSpanMaskerTest {
     }
 
     @Test
-    @DisplayName("unmask: 플레이스홀더를 원본으로 복원")
+    @DisplayName("unmask: 타입별 플레이스홀더를 원본으로 복원")
     void unmask_기본() {
         List<LockedSpan> spans = List.of(
-                new LockedSpan(0, "2024년 2월 4일", "{{LOCKED_0}}", LockedSpanType.DATE, 0, 11)
+                new LockedSpan(1, "2024년 2월 4일", "{{DATE_1}}", LockedSpanType.DATE, 0, 11)
         );
 
-        String output = "{{LOCKED_0}}에 방문하겠습니다.";
+        String output = "{{DATE_1}}에 방문하겠습니다.";
         LockedSpanMasker.UnmaskResult result = masker.unmask(output, spans);
 
         assertThat(result.text()).isEqualTo("2024년 2월 4일에 방문하겠습니다.");
@@ -72,11 +72,11 @@ class LockedSpanMaskerTest {
     @DisplayName("unmask: 유연한 플레이스홀더 매칭")
     void unmask_유연_매칭() {
         List<LockedSpan> spans = List.of(
-                new LockedSpan(0, "150,000원", "{{LOCKED_0}}", LockedSpanType.MONEY, 0, 9)
+                new LockedSpan(1, "150,000원", "{{MONEY_1}}", LockedSpanType.MONEY, 0, 9)
         );
 
         // LLM이 공백이나 하이픈을 추가한 경우
-        String output = "{{ LOCKED_0 }}을 보내주세요.";
+        String output = "{{ MONEY_1 }}을 보내주세요.";
         LockedSpanMasker.UnmaskResult result = masker.unmask(output, spans);
 
         assertThat(result.text()).isEqualTo("150,000원을 보내주세요.");
@@ -87,12 +87,12 @@ class LockedSpanMaskerTest {
     @DisplayName("unmask: 누락된 스팬 감지")
     void unmask_누락_감지() {
         List<LockedSpan> spans = List.of(
-                new LockedSpan(0, "2024년 2월 4일", "{{LOCKED_0}}", LockedSpanType.DATE, 0, 11),
-                new LockedSpan(1, "150,000원", "{{LOCKED_1}}", LockedSpanType.MONEY, 13, 22)
+                new LockedSpan(1, "2024년 2월 4일", "{{DATE_1}}", LockedSpanType.DATE, 0, 11),
+                new LockedSpan(1, "150,000원", "{{MONEY_1}}", LockedSpanType.MONEY, 13, 22)
         );
 
-        // LLM이 LOCKED_1을 누락한 경우
-        String output = "{{LOCKED_0}}에 입금해주세요.";
+        // LLM이 MONEY_1을 누락한 경우
+        String output = "{{DATE_1}}에 입금해주세요.";
         LockedSpanMasker.UnmaskResult result = masker.unmask(output, spans);
 
         assertThat(result.text()).contains("2024년 2월 4일");
@@ -104,7 +104,7 @@ class LockedSpanMaskerTest {
     @DisplayName("unmask: 원본 텍스트가 그대로 있으면 누락으로 안 침")
     void unmask_원본_그대로_존재() {
         List<LockedSpan> spans = List.of(
-                new LockedSpan(0, "150,000원", "{{LOCKED_0}}", LockedSpanType.MONEY, 0, 9)
+                new LockedSpan(1, "150,000원", "{{MONEY_1}}", LockedSpanType.MONEY, 0, 9)
         );
 
         // LLM이 플레이스홀더 대신 원본을 그대로 출력한 경우

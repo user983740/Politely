@@ -9,7 +9,6 @@ import {AnalysisPanel} from '@/widgets/analysis-panel';
 import {CostPanel} from '@/widgets/cost-panel';
 import {QualityReportPanel} from '@/widgets/quality-report-panel';
 import {PipelineTracePanel} from '@/widgets/pipeline-trace-panel';
-import {getTierInfo} from '@/features/transform/api';
 import {streamTransform} from '@/features/transform/stream-api';
 import type {LockedSpanInfo} from '@/features/transform/stream-api';
 import {ApiError} from '@/shared/api/client';
@@ -91,7 +90,6 @@ export default function HomePage() {
     validationIssues,
     isTransforming,
     transformError,
-    tierInfo,
     usageInfo,
     setPersona,
     toggleContext,
@@ -112,48 +110,21 @@ export default function HomePage() {
     setCurrentPhase,
     setIsTransforming,
     setTransformError,
-    setTierInfo,
     setUsageInfo,
     resetForNewInput,
   } = useTransformStore();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [isPaidOverride, setIsPaidOverride] = useState(false);
   const [identityBoosterToggle, setIdentityBoosterToggle] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const rawStreamRef = useRef('');
   const spansRef = useRef<LockedSpanInfo[]>([]);
 
-  const handleTierToggle = () => {
-    const next = !isPaidOverride;
-    setIsPaidOverride(next);
-    if (next) {
-      setTierInfo({tier: 'PAID', maxTextLength: 1000, partialRewriteEnabled: true, promptEnabled: true});
-    } else {
-      setTierInfo({tier: 'FREE', maxTextLength: 300, partialRewriteEnabled: false, promptEnabled: false});
-    }
-  };
+  const maxTextLength = 2000;
 
   useEffect(() => {
     if (!toneLevel) setToneLevel('POLITE');
   }, [toneLevel, setToneLevel]);
-
-  // Fetch tier info on mount and when login state changes
-  useEffect(() => {
-    getTierInfo()
-      .then(setTierInfo)
-      .catch(() => {
-        // Fallback to free tier defaults
-        setTierInfo({
-          tier: 'FREE',
-          maxTextLength: 300,
-          partialRewriteEnabled: false,
-          promptEnabled: false,
-        });
-      });
-  }, [isLoggedIn, setTierInfo]);
-
-  const maxTextLength = tierInfo?.maxTextLength ?? 300;
 
   const toneIndex = TONE_SLIDER_LEVELS.findIndex(
     (t) => t.key === (toneLevel ?? 'POLITE'),
@@ -194,9 +165,8 @@ export default function HomePage() {
           contexts,
           toneLevel,
           originalText,
-          ...(tierInfo?.promptEnabled && userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
+          ...(userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
           ...(senderInfo.trim() ? {senderInfo: senderInfo.trim()} : {}),
-          tierOverride: tierInfo?.tier,
           identityBoosterToggle,
         },
         {
@@ -226,6 +196,10 @@ export default function HomePage() {
           onUsage: (usage) => setUsageInfo(usage),
           onDone: (fullText) => setTransformedText(fullText),
           onError: (message) => setTransformError(message),
+          onRetry: () => {
+            rawStreamRef.current = '';
+            setTransformedText('');
+          },
         },
         controller.signal,
       );
@@ -238,9 +212,7 @@ export default function HomePage() {
           : null;
 
       if (apiErr) {
-        if (apiErr.code === 'TIER_RESTRICTION') {
-          setTransformError(apiErr.message);
-        } else if (apiErr.code === 'AI_TRANSFORM_ERROR') {
+        if (apiErr.code === 'AI_TRANSFORM_ERROR') {
           setTransformError('AI 변환 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
         } else {
           setTransformError(apiErr.message);
@@ -444,6 +416,7 @@ export default function HomePage() {
               processedText={processedText}
               validationIssues={validationIssues}
               transformedText={transformedText}
+              transformError={transformError}
             />
             <ResultPanel />
             <AnalysisPanel labels={labels} />
@@ -496,17 +469,6 @@ export default function HomePage() {
           <span className="text-base font-bold text-text">Politely</span>
         </div>
         <div className="flex items-center gap-2">
-          {/* Tier toggle (mobile) */}
-          <button
-            onClick={handleTierToggle}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-full border border-border/60 text-xs cursor-pointer transition-colors"
-          >
-            <span className={isPaidOverride ? 'text-text-secondary' : 'font-semibold text-text'}>Free</span>
-            <div className={`relative w-7 h-4 rounded-full transition-colors ${isPaidOverride ? 'bg-accent' : 'bg-border'}`}>
-              <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${isPaidOverride ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
-            </div>
-            <span className={isPaidOverride ? 'font-semibold text-accent' : 'text-text-secondary'}>Pro</span>
-          </button>
           {isLoggedIn ? (
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-text truncate max-w-24">
@@ -619,9 +581,7 @@ export default function HomePage() {
               <p className="text-sm font-medium text-text truncate">
                 {isLoggedIn ? name || loginId : 'Guest User'}
               </p>
-              <p className="text-xs text-text-secondary">
-                {isPaidOverride ? 'Premium' : 'Free Tier'}
-              </p>
+              <p className="text-xs text-text-secondary">Premium</p>
             </div>
             {isLoggedIn ? (
               <button
@@ -638,19 +598,6 @@ export default function HomePage() {
                 로그인
               </Link>
             )}
-          </div>
-          {/* Tier toggle (desktop) */}
-          <div className="mt-3 flex items-center gap-4">
-            <button
-              onClick={handleTierToggle}
-              className="flex items-center gap-2 cursor-pointer group"
-            >
-              <span className={`text-xs transition-colors ${isPaidOverride ? 'text-text-secondary' : 'font-semibold text-text'}`}>Free</span>
-              <div className={`relative w-8 h-[18px] rounded-full transition-colors ${isPaidOverride ? 'bg-accent' : 'bg-border'}`}>
-                <div className={`absolute top-[3px] w-3 h-3 rounded-full bg-white shadow transition-transform ${isPaidOverride ? 'translate-x-[14px]' : 'translate-x-[3px]'}`} />
-              </div>
-              <span className={`text-xs transition-colors ${isPaidOverride ? 'font-semibold text-accent' : 'text-text-secondary'}`}>Premium</span>
-            </button>
           </div>
         </div>
       </aside>
@@ -736,25 +683,23 @@ export default function HomePage() {
             className="w-full flex-1 min-h-[80px] sm:min-h-[280px] lg:min-h-[360px] text-base text-text leading-relaxed placeholder:text-text-secondary/40 resize-none outline-none bg-transparent"
           />
 
-          {/* Additional prompt input (Premium only) */}
-          {tierInfo?.promptEnabled && (
-            <div className="mt-1 sm:mt-4 shrink-0">
-              <div className="flex items-center justify-between mb-1 sm:mb-2">
-                <label className="text-xs sm:text-sm font-medium text-text-secondary">추가 정보</label>
-                <span className={`text-xs tabular-nums ${userPrompt.length > 0 ? 'text-accent' : 'text-text-secondary/50'}`}>
-                  {userPrompt.length} / {MAX_PROMPT_LENGTH}
-                </span>
-              </div>
-              <input
-                type="text"
-                placeholder="예: 첫 거래처라 조심스러운 상황, 두 번째 요청이라 미안한 맥락"
-                maxLength={MAX_PROMPT_LENGTH}
-                value={userPrompt}
-                onChange={(e) => setUserPrompt(e.target.value)}
-                className="w-full px-3 sm:px-4 py-2 sm:py-3 text-sm text-text bg-surface border border-border/60 rounded-xl placeholder:text-text-secondary/40 outline-none focus:border-accent/40 transition-colors"
-              />
+          {/* Additional prompt input */}
+          <div className="mt-1 sm:mt-4 shrink-0">
+            <div className="flex items-center justify-between mb-1 sm:mb-2">
+              <label className="text-xs sm:text-sm font-medium text-text-secondary">추가 정보</label>
+              <span className={`text-xs tabular-nums ${userPrompt.length > 0 ? 'text-accent' : 'text-text-secondary/50'}`}>
+                {userPrompt.length} / {MAX_PROMPT_LENGTH}
+              </span>
             </div>
-          )}
+            <input
+              type="text"
+              placeholder="예: 첫 거래처라 조심스러운 상황, 두 번째 요청이라 미안한 맥락"
+              maxLength={MAX_PROMPT_LENGTH}
+              value={userPrompt}
+              onChange={(e) => setUserPrompt(e.target.value)}
+              className="w-full px-3 sm:px-4 py-2 sm:py-3 text-sm text-text bg-surface border border-border/60 rounded-xl placeholder:text-text-secondary/40 outline-none focus:border-accent/40 transition-colors"
+            />
+          </div>
 
           {/* Error message */}
           {transformError && (
@@ -790,13 +735,9 @@ export default function HomePage() {
                     ? '옵션을 선택하세요'
                     : '텍스트를 입력하세요'}
             </span>
-            {tierInfo && (
-              <span className="text-xs text-text-secondary/60 ml-2 hidden sm:inline shrink-0">
-                {tierInfo.tier === 'FREE'
-                  ? `프리티어 · 최대 ${tierInfo.maxTextLength}자`
-                  : `프리미엄 · 최대 ${tierInfo.maxTextLength.toLocaleString()}자`}
-              </span>
-            )}
+            <span className="text-xs text-text-secondary/60 ml-2 hidden sm:inline shrink-0">
+              최대 {maxTextLength.toLocaleString()}자
+            </span>
           </div>
           <button
             onClick={handleTransform}

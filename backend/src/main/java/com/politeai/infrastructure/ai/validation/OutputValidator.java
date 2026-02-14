@@ -272,7 +272,7 @@ public class OutputValidator {
     }
 
     // Rule 5: Length overexpansion
-    private static final int MAX_ABSOLUTE_OUTPUT_LENGTH = 4000;
+    private static final int MAX_ABSOLUTE_OUTPUT_LENGTH = 6000;
 
     private void checkLengthOverexpansion(String output, String originalText, List<ValidationIssue> issues) {
         if (originalText.length() >= 20 && output.length() > originalText.length() * 3) {
@@ -330,9 +330,10 @@ public class OutputValidator {
                 continue;
             }
 
-            // Check flexible placeholder pattern (e.g., {{ LOCKED-0 }})
+            // Check flexible placeholder pattern (e.g., {{ DATE-1 }})
+            String prefix = span.type().placeholderPrefix();
             Pattern flexible = Pattern.compile(
-                    "\\{\\{\\s*LOCKED[_\\-]?" + span.index() + "\\s*\\}\\}"
+                    "\\{\\{\\s*" + prefix + "[-_]?" + span.index() + "\\s*\\}\\}"
             );
             if (flexible.matcher(maskedOutput).find()) {
                 continue;
@@ -376,6 +377,18 @@ public class OutputValidator {
                         Severity.ERROR,
                         "REDACTED 마커 출력에 포함됨: " + m.group(),
                         m.group()
+                ));
+            }
+
+            // Check 1b: [SOFTEN:LABEL: ...] markers should not appear in output
+            Pattern softenMarker = Pattern.compile("\\[SOFTEN:[A-Z_]+:\\s[^\\]]*\\]");
+            Matcher sm = softenMarker.matcher(maskedOutput);
+            while (sm.find()) {
+                issues.add(new ValidationIssue(
+                        ValidationIssueType.REDACTED_REENTRY,
+                        Severity.ERROR,
+                        "SOFTEN 마커 출력에 포함됨: " + sm.group(),
+                        sm.group()
                 ));
             }
         }

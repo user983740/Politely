@@ -19,6 +19,7 @@ interface Props {
   processedText: string | null;
   validationIssues: ValidationIssueData[] | null;
   transformedText: string;
+  transformError: string | null;
 }
 
 const SPAN_TYPE_LABELS: Record<string, string> = {
@@ -82,6 +83,14 @@ const STEPS: StepDef[] = [
     runPhases: ['segmenting'],
   },
   {
+    id: 'segment_refine',
+    label: '긴 세그먼트 정제',
+    activeLabel: '세그먼트 정제 중',
+    runPhases: ['segment_refining'],
+    skipPhases: ['segment_refining_skipped'],
+    isLlm: true,
+  },
+  {
     id: 'label',
     label: '3계층 구조 분석',
     activeLabel: '라벨링 중',
@@ -117,9 +126,9 @@ const STEPS: StepDef[] = [
   },
 ];
 
-type StepStatus = 'pending' | 'running' | 'completed' | 'skipped';
+type StepStatus = 'pending' | 'running' | 'completed' | 'skipped' | 'error';
 
-function getStepStatuses(currentPhase: PipelinePhase | null, skippedSteps: Set<string>): Map<string, StepStatus> {
+function getStepStatuses(currentPhase: PipelinePhase | null, skippedSteps: Set<string>, hasError: boolean): Map<string, StepStatus> {
   const statuses = new Map<string, StepStatus>();
 
   if (!currentPhase) {
@@ -136,7 +145,8 @@ function getStepStatuses(currentPhase: PipelinePhase | null, skippedSteps: Set<s
     }
 
     if (step.runPhases.includes(currentPhase)) {
-      statuses.set(step.id, 'running');
+      // If there's an error, mark the currently running step as error instead of running
+      statuses.set(step.id, hasError ? 'error' : 'running');
       foundCurrent = true;
     } else if (step.skipPhases?.includes(currentPhase)) {
       statuses.set(step.id, 'skipped');
@@ -152,11 +162,11 @@ function getStepStatuses(currentPhase: PipelinePhase | null, skippedSteps: Set<s
 }
 
 function HighlightLocked({ text }: { text: string }) {
-  const parts = text.split(/({{LOCKED_\d+}})/g);
+  const parts = text.split(/({{[A-Z]+_\d+}})/g);
   return (
     <span>
       {parts.map((part, i) =>
-        /^{{LOCKED_\d+}}$/.test(part) ? (
+        /^{{[A-Z]+_\d+}}$/.test(part) ? (
           <span key={i} className="px-1 py-0.5 mx-0.5 rounded bg-indigo-100 text-indigo-700 text-[11px] font-mono font-medium">
             {part}
           </span>
@@ -169,7 +179,7 @@ function HighlightLocked({ text }: { text: string }) {
 }
 
 function HighlightProcessed({ text }: { text: string }) {
-  const parts = text.split(/(\[REDACTED:[^\]]+\]|\[SOFTEN:\s[^\]]*\])/g);
+  const parts = text.split(/(\[REDACTED:[^\]]+\]|\[SOFTEN:[A-Z_]+:\s[^\]]*\])/g);
   return (
     <span>
       {parts.map((part, i) => {
@@ -218,10 +228,20 @@ function SkipIcon() {
   );
 }
 
+function ErrorIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-red-500" aria-hidden="true">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
 function StepIndicator({ status }: { status: StepStatus }) {
   if (status === 'running') return <SpinnerIcon />;
   if (status === 'completed') return <CheckIcon />;
   if (status === 'skipped') return <SkipIcon />;
+  if (status === 'error') return <ErrorIcon />;
   return <div className="w-3.5 h-3.5 rounded-full border-2 border-border/60" />;
 }
 
@@ -388,6 +408,7 @@ export default function PipelineTracePanel({
   processedText,
   validationIssues,
   transformedText,
+  transformError,
 }: Props) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [skippedSteps, setSkippedSteps] = useState<Set<string>>(new Set());
@@ -407,7 +428,7 @@ export default function PipelineTracePanel({
     setSkippedSteps(newSkipped);
 
     // Auto-expand completed steps
-    const statuses = getStepStatuses(currentPhase, newSkipped);
+    const statuses = getStepStatuses(currentPhase, newSkipped, false);
     const completedWithData = new Set<string>();
     statuses.forEach((status, stepId) => {
       if (status === 'completed') completedWithData.add(stepId);
@@ -418,7 +439,10 @@ export default function PipelineTracePanel({
   // After complete, show all expandable
   const isComplete = currentPhase === 'complete' || (!isTransforming && transformedText.length > 0);
 
-  const statuses = getStepStatuses(currentPhase, skippedSteps);
+  // Detect error: not transforming, phase is not 'complete', and there's an error message
+  const hasError = !isTransforming && currentPhase !== null && currentPhase !== 'complete' && !!transformError;
+
+  const statuses = getStepStatuses(currentPhase, skippedSteps, hasError);
 
   // Determine if we should render at all
   const hasAnyPhase = currentPhase !== null;
@@ -482,7 +506,8 @@ export default function PipelineTracePanel({
               {!isLast && (
                 <div
                   className={`absolute left-[23px] top-[22px] w-px ${
-                    status === 'completed' || status === 'skipped' ? 'bg-emerald-200' : 'bg-border/40'
+                    status === 'error' ? 'bg-red-200'
+                      : status === 'completed' || status === 'skipped' ? 'bg-emerald-200' : 'bg-border/40'
                   }`}
                   style={{ bottom: 0 }}
                 />
@@ -499,12 +524,16 @@ export default function PipelineTracePanel({
                 <div className="flex-1 flex items-center gap-2 min-w-0">
                   <span className={`text-xs font-medium ${
                     status === 'running' ? 'text-accent'
-                      : status === 'completed' ? 'text-text'
-                        : status === 'skipped' ? 'text-text-secondary/40 line-through'
-                          : 'text-text-secondary/60'
+                      : status === 'error' ? 'text-red-500'
+                        : status === 'completed' ? 'text-text'
+                          : status === 'skipped' ? 'text-text-secondary/40 line-through'
+                            : 'text-text-secondary/60'
                   }`}>
                     {status === 'running' ? step.activeLabel : step.label}
                   </span>
+                  {status === 'error' && (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-red-50 text-red-500 font-medium">ERROR</span>
+                  )}
                   {step.isLlm && status !== 'skipped' && (
                     <span className="text-[10px] px-1 py-0.5 rounded bg-violet-50 text-violet-500 font-medium">LLM</span>
                   )}

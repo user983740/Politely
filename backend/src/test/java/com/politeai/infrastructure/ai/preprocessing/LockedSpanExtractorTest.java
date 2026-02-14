@@ -298,13 +298,16 @@ class LockedSpanExtractorTest {
         }
 
         @Test
-        void 플레이스홀더_인덱스_연속() {
+        void 플레이스홀더_타입별_카운터() {
             String text = "2024년 2월 4일 12~3시에 150,000원 입금";
             List<LockedSpan> spans = extractor.extract(text);
 
-            for (int i = 0; i < spans.size(); i++) {
-                assertThat(spans.get(i).index()).isEqualTo(i);
-                assertThat(spans.get(i).placeholder()).isEqualTo("{{LOCKED_" + i + "}}");
+            // Each span should have type-specific placeholder
+            for (LockedSpan span : spans) {
+                String prefix = span.type().placeholderPrefix();
+                assertThat(span.placeholder()).startsWith("{{" + prefix + "_");
+                assertThat(span.placeholder()).endsWith("}}");
+                assertThat(span.index()).isGreaterThanOrEqualTo(1);
             }
         }
     }

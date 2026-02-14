@@ -8,15 +8,19 @@ interface Props {
 const LABEL_DISPLAY: Record<string, string> = {
   CORE_FACT: '핵심사실',
   CORE_INTENT: '핵심의도',
+  REQUEST: '요청',
+  APOLOGY: '사과',
   COURTESY: '예의',
-  EMOTIONAL: '감정과잉',
-  OUT_OF_SCOPE: '범위초과',
+  ACCOUNTABILITY: '책임소재',
+  SELF_EXPLAIN: '상황설명',
+  NEGATIVE_FEEDBACK: '부정적 평가',
+  EMOTIONAL: '감정표현',
   SPECULATION: '추측',
-  BLAME: '책임전가',
-  SELF_DEFENSE: '자기변호',
+  OVER_EXPLANATION: '과잉설명',
+  AGGRESSION: '공격/비꼬기',
+  PERSONAL_ATTACK: '인신공격',
   PRIVATE_TMI: '사적정보',
-  AGGRESSION: '공격/비난',
-  GRUMBLE: '체념/투덜',
+  PURE_GRUMBLE: '순수넋두리',
 };
 
 const TIER_STYLES: Record<string, { bg: string; badge: string; text: string }> = {

@@ -21,7 +21,7 @@ public record TransformRequest(
         ToneLevel toneLevel,
 
         @NotBlank(message = "Original text is required")
-        @Size(max = 1000, message = "Original text must not exceed 1000 characters")
+        @Size(max = 2000, message = "Original text must not exceed 2000 characters")
         String originalText,
 
         @Size(max = 500, message = "User prompt must not exceed 500 characters")
@@ -29,8 +29,6 @@ public record TransformRequest(
 
         @Size(max = 100, message = "Sender info must not exceed 100 characters")
         String senderInfo,
-
-        String tierOverride,
 
         Boolean identityBoosterToggle
 ) {}

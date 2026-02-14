@@ -2,12 +2,7 @@ package com.politeai.interfaces.api.transform;
 
 import com.politeai.application.transform.TransformAppService;
 import com.politeai.domain.transform.model.TransformResult;
-import com.politeai.domain.user.model.User;
-import com.politeai.domain.user.model.UserTier;
-import com.politeai.domain.user.repository.UserRepository;
 import com.politeai.infrastructure.ai.AiStreamingTransformService;
-import com.politeai.interfaces.api.dto.PartialRewriteRequest;
-import com.politeai.interfaces.api.dto.PartialRewriteResponse;
 import com.politeai.interfaces.api.dto.TierInfoResponse;
 import com.politeai.interfaces.api.dto.TransformRequest;
 import com.politeai.interfaces.api.dto.TransformResponse;
@@ -15,8 +10,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -31,20 +24,16 @@ public class TransformController {
 
     private final TransformAppService transformAppService;
     private final AiStreamingTransformService streamingTransformService;
-    private final UserRepository userRepository;
 
     @PostMapping
     public ResponseEntity<TransformResponse> transform(@Valid @RequestBody TransformRequest request) {
-        UserTier tier = resolveTier(request.tierOverride());
-
         TransformResult result = transformAppService.transform(
                 request.persona(),
                 request.contexts(),
                 request.toneLevel(),
                 request.originalText(),
                 request.userPrompt(),
-                request.senderInfo(),
-                tier);
+                request.senderInfo());
 
         return ResponseEntity.ok(new TransformResponse(
                 result.getTransformedText(),
@@ -54,10 +43,7 @@ public class TransformController {
 
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamTransform(@Valid @RequestBody TransformRequest request) {
-        UserTier tier = resolveTier(request.tierOverride());
-
-        transformAppService.validateTransformRequest(
-                request.originalText(), request.userPrompt(), tier);
+        transformAppService.validateTransformRequest(request.originalText());
 
         return streamingTransformService.streamTransform(
                 request.persona(),
@@ -66,75 +52,15 @@ public class TransformController {
                 request.originalText(),
                 request.userPrompt(),
                 request.senderInfo(),
-                tier,
-                Boolean.TRUE.equals(request.identityBoosterToggle()));
-    }
-
-    @PostMapping("/partial")
-    public ResponseEntity<PartialRewriteResponse> partialRewrite(@Valid @RequestBody PartialRewriteRequest request) {
-        UserTier tier = resolveTier(request.tierOverride());
-
-        TransformResult result = transformAppService.partialRewrite(
-                request.selectedText(),
-                request.fullContext(),
-                request.persona(),
-                request.contexts(),
-                request.toneLevel(),
-                request.userPrompt(),
-                request.senderInfo(),
-                request.analysisContext(),
-                tier);
-
-        return ResponseEntity.ok(new PartialRewriteResponse(result.getTransformedText()));
-    }
-
-    @PostMapping(value = "/partial/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamPartialRewrite(@Valid @RequestBody PartialRewriteRequest request) {
-        UserTier tier = resolveTier(request.tierOverride());
-
-        transformAppService.validatePartialRewriteRequest(tier);
-
-        return streamingTransformService.streamPartialRewrite(
-                request.selectedText(),
-                request.fullContext(),
-                request.persona(),
-                request.contexts(),
-                request.toneLevel(),
-                request.userPrompt(),
-                request.senderInfo(),
-                request.analysisContext());
+                Boolean.TRUE.equals(request.identityBoosterToggle()),
+                transformAppService.resolveFinalMaxTokens());
     }
 
     @GetMapping("/tier")
     public ResponseEntity<TierInfoResponse> getTierInfo() {
-        UserTier tier = resolveUserTier();
-        int maxTextLength = transformAppService.getMaxTextLength(tier);
-        boolean partialRewriteEnabled = tier == UserTier.PAID;
-        boolean promptEnabled = tier == UserTier.PAID;
+        int maxTextLength = transformAppService.getMaxTextLength();
 
         return ResponseEntity.ok(new TierInfoResponse(
-                tier.name(), maxTextLength, partialRewriteEnabled, promptEnabled));
-    }
-
-    private UserTier resolveTier(String tierOverride) {
-        if (tierOverride != null) {
-            try {
-                return UserTier.valueOf(tierOverride);
-            } catch (IllegalArgumentException ignored) {
-            }
-        }
-        return resolveUserTier();
-    }
-
-    private UserTier resolveUserTier() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated() || "anonymousUser".equals(auth.getPrincipal())) {
-            return UserTier.FREE;
-        }
-
-        String email = (String) auth.getPrincipal();
-        return userRepository.findByEmail(email)
-                .map(User::getTier)
-                .orElse(UserTier.FREE);
+                "PAID", maxTextLength, true));
     }
 }

@@ -13,7 +13,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -45,7 +47,7 @@ public class IdentityLockBooster {
             당신은 텍스트에서 변경 불가능한 고유 표현을 추출하는 전문가입니다.
             정규식으로 잡을 수 없는, 대체하면 의미가 달라지는 고유 식별자만 찾습니다.
 
-            이미 마스킹된 {{LOCKED_N}} 플레이스홀더는 무시하세요.
+            이미 마스킹된 {{TYPE_N}} 형식의 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}})는 무시하세요.
             날짜, 시간, 전화번호, 이메일, URL, 금액 등은 이미 처리되었으므로 제외하세요.
 
             ## 추출 대상 (고유 식별자만)
@@ -78,15 +80,17 @@ public class IdentityLockBooster {
             return new BoosterResult(maskedText, currentSpans, result.promptTokens(), result.completionTokens());
         }
 
-        // Combine and re-index
+        // Combine and re-index with type-specific placeholders
         List<LockedSpan> allSpans = new ArrayList<>(currentSpans);
         allSpans.addAll(newSpans);
         allSpans.sort(Comparator.comparingInt(LockedSpan::startPos));
 
+        Map<String, Integer> prefixCounters = new HashMap<>();
         List<LockedSpan> reindexed = new ArrayList<>();
-        for (int i = 0; i < allSpans.size(); i++) {
-            LockedSpan s = allSpans.get(i);
-            reindexed.add(new LockedSpan(i, s.originalText(), "{{LOCKED_" + i + "}}", s.type(), s.startPos(), s.endPos()));
+        for (LockedSpan s : allSpans) {
+            String prefix = s.type().placeholderPrefix();
+            int counter = prefixCounters.merge(prefix, 1, Integer::sum);
+            reindexed.add(new LockedSpan(counter, s.originalText(), "{{" + prefix + "_" + counter + "}}", s.type(), s.startPos(), s.endPos()));
         }
 
         String remasked = spanMasker.mask(normalizedText, reindexed);
@@ -129,9 +133,10 @@ public class IdentityLockBooster {
                         .anyMatch(s -> fPos < s.endPos() && fEndPos > s.startPos());
                 if (overlaps) continue;
 
+                String prefix = LockedSpanType.SEMANTIC.placeholderPrefix();
                 LockedSpan newSpan = new LockedSpan(
                         nextIndex++, text,
-                        "{{LOCKED_" + (nextIndex - 1) + "}}",
+                        "{{" + prefix + "_" + (nextIndex - 1) + "}}",
                         LockedSpanType.SEMANTIC, pos, endPos
                 );
                 result.add(newSpan);

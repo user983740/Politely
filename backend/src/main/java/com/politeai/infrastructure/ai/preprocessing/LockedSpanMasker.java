@@ -16,10 +16,11 @@ import java.util.regex.Pattern;
 @Component
 public class LockedSpanMasker {
 
-    // Flexible pattern for matching placeholders in LLM output
-    // Handles variations: {{LOCKED_0}}, {{ LOCKED_0 }}, {{LOCKED-0}}, etc.
+    // Flexible pattern for matching type-specific placeholders in LLM output
+    // Handles variations: {{DATE_1}}, {{ DATE_1 }}, {{DATE-1}}, etc.
+    // Captures group 1: prefix (e.g., DATE), group 2: counter (e.g., 1)
     private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile(
-            "\\{\\{\\s*LOCKED[_\\-]?(\\d+)\\s*\\}\\}"
+            "\\{\\{\\s*([A-Z]+)[-_](\\d+)\\s*\\}\\}"
     );
 
     /**
@@ -65,11 +66,11 @@ public class LockedSpanMasker {
             return new UnmaskResult(output, List.of());
         }
 
-        // Build index→span map for safe lookup (handles reindexing correctly)
-        java.util.Map<Integer, LockedSpan> spanMap = new java.util.HashMap<>();
-        java.util.Set<Integer> restored = new java.util.HashSet<>();
+        // Build placeholder→span map using canonical placeholder string (e.g., "{{DATE_1}}")
+        java.util.Map<String, LockedSpan> spanMap = new java.util.HashMap<>();
+        java.util.Set<String> restored = new java.util.HashSet<>();
         for (LockedSpan span : spans) {
-            spanMap.put(span.index(), span);
+            spanMap.put(span.placeholder(), span);
         }
 
         // Replace all placeholders found in the output
@@ -77,13 +78,15 @@ public class LockedSpanMasker {
         Matcher matcher = PLACEHOLDER_PATTERN.matcher(result);
         StringBuilder sb = new StringBuilder();
         while (matcher.find()) {
-            int index = Integer.parseInt(matcher.group(1));
-            LockedSpan span = spanMap.get(index);
+            String prefix = matcher.group(1);
+            String counter = matcher.group(2);
+            String canonical = "{{" + prefix + "_" + counter + "}}";
+            LockedSpan span = spanMap.get(canonical);
             if (span != null) {
                 matcher.appendReplacement(sb, Matcher.quoteReplacement(span.originalText()));
-                restored.add(index);
+                restored.add(canonical);
             } else {
-                log.warn("LockedSpan placeholder index {} not found in span map (possible stale index after reindexing)", index);
+                log.warn("LockedSpan placeholder {} not found in span map", canonical);
             }
         }
         matcher.appendTail(sb);
@@ -92,15 +95,15 @@ public class LockedSpanMasker {
         // Check for missing spans
         List<LockedSpan> missingSpans = new java.util.ArrayList<>();
         for (LockedSpan span : spans) {
-            if (!restored.contains(span.index())) {
-                log.warn("LockedSpan missing in output: index={}, type={}, text='{}'",
-                        span.index(), span.type(), span.originalText());
+            if (!restored.contains(span.placeholder())) {
+                log.warn("LockedSpan missing in output: placeholder={}, type={}, text='{}'",
+                        span.placeholder(), span.type(), span.originalText());
 
                 // Check if the original text appears verbatim in the output (LLM may have expanded it)
                 if (!result.contains(span.originalText())) {
                     missingSpans.add(span);
                 } else {
-                    log.info("LockedSpan {} found as verbatim text in output (LLM preserved without placeholder)", span.index());
+                    log.info("LockedSpan {} found as verbatim text in output (LLM preserved without placeholder)", span.placeholder());
                 }
             }
         }

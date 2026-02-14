@@ -9,20 +9,7 @@ export interface StreamTransformRequest {
   originalText: string;
   userPrompt?: string;
   senderInfo?: string;
-  tierOverride?: string;
   identityBoosterToggle?: boolean;
-}
-
-export interface StreamPartialRewriteRequest {
-  selectedText: string;
-  fullContext?: string;
-  persona: Persona;
-  contexts: Context[];
-  toneLevel: ToneLevel;
-  userPrompt?: string;
-  senderInfo?: string;
-  tierOverride?: string;
-  analysisContext?: string | null;
 }
 
 export interface LockedSpanInfo {
@@ -89,6 +76,8 @@ export type PipelinePhase =
   | 'identity_boosting'
   | 'identity_skipped'
   | 'segmenting'
+  | 'segment_refining'
+  | 'segment_refining_skipped'
   | 'labeling'
   | 'relation_analyzing'
   | 'relation_skipped'
@@ -111,6 +100,7 @@ export interface StreamCallbacks {
   onProcessedText?: (text: string) => void;
   onValidationIssues?: (issues: ValidationIssueData[]) => void;
   onPhase?: (phase: PipelinePhase) => void;
+  onRetry?: () => void;
 }
 
 function getHeaders(): HeadersInit {
@@ -267,6 +257,9 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
     case 'phase':
       callbacks.onPhase?.(data as PipelinePhase);
       break;
+    case 'retry':
+      callbacks.onRetry?.();
+      break;
   }
 }
 
@@ -278,10 +271,3 @@ export function streamTransform(
   return streamSSE(`${API_BASE_URL}/v1/transform/stream`, req, callbacks, signal);
 }
 
-export function streamPartialRewrite(
-  req: StreamPartialRewriteRequest,
-  callbacks: StreamCallbacks,
-  signal?: AbortSignal,
-): Promise<void> {
-  return streamSSE(`${API_BASE_URL}/v1/transform/partial/stream`, req, callbacks, signal);
-}

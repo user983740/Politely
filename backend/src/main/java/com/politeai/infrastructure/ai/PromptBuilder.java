@@ -7,7 +7,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @Component
 public class PromptBuilder {
@@ -37,29 +36,6 @@ public class PromptBuilder {
             ToneLevel.POLITE, "공손",
             ToneLevel.VERY_POLITE, "매우 공손"
     );
-
-    // ===== Core system prompt (used by partial rewrite) =====
-
-    private static final String CORE_SYSTEM_PROMPT = """
-            당신은 한국어 커뮤니케이션 전문가입니다. 화자의 의도와 감정을 파악하여 상대방의 마음을 움직이는 메시지로 재구성합니다.
-
-            ## 핵심 원칙
-            1. **재구성**: 존댓말 번역이 아닌, 의도를 살린 메시지 재구성. 쿠션어로 감정의 깊이를 만드세요.
-            2. **관점 유지**: 화자/청자를 정확히 구분. 화자의 관점을 절대 벗어나지 마세요.
-            3. **사실 보존**: {{LOCKED_N}} 플레이스홀더는 절대 수정/삭제/추가하지 마세요. 그대로 유지.
-            4. **위험 표현 대체**: "피의자"→"당사자", 공격적/비하/책임회피/비꼼 표현을 사실 유지하며 건설적으로 순화.
-            5. **부적절 내용 필터링**: 화자에게 불리하거나 받는 사람에게 부적절한 정보는 삭제하거나 품위 있게 대체하세요.
-               - 음주/유흥/개인 일탈 언급 → 삭제하거나 "개인 사정"/"불가피한 사유" 등으로 대체
-               - 체념/투덜거림("어쩔 수 없다", "억울하다") → 삭제하거나 건설적 표현으로 전환
-               - TMI(받는 사람이 알 필요 없는 사적 사유) → 핵심 사실만 남기고 삭제
-            6. **자연스러움**: "드리겠습니다" 연속 2회 이상 금지. 어미를 다양하게. 기계적 패턴 금지.
-            7. **이전 변환 존중**: 사전 분석 결과가 제공된 경우, 이전 전체 변환에서 제거된 내용(책임 전가, 공격적 표현, TMI 등)을 다시 포함하지 마세요.
-
-            ## 출력 규칙 (절대 준수)
-            - **변환된 메시지 텍스트만 출력하세요.** 분석, 설명, 해설, 이모지, "화자는~", "전체적으로~" 같은 메타 발언을 절대 포함하지 마세요.
-            - 첫 글자부터 바로 변환된 메시지여야 합니다. 앞뒤에 어떤 부연도 붙이지 마세요.
-            - 문단 사이에만 줄바꿈(\\n\\n). 문단 내 문장은 줄바꿈 없이 이어서 작성. 한 문단 최대 4문장.
-            - 원문 길이에 비례하는 자연스러운 분량. 짧은 원문은 짧게.""";
 
     // ===== Dynamic persona blocks (each ~50 tokens) =====
 
@@ -137,14 +113,6 @@ public class PromptBuilder {
     // ===== Public methods =====
 
     /**
-     * Build dynamic system prompt: core + persona block + context blocks + tone block.
-     * Used by partial rewrite.
-     */
-    public String buildSystemPrompt(Persona persona, List<SituationContext> contexts, ToneLevel toneLevel) {
-        return buildDynamicBlocks(CORE_SYSTEM_PROMPT, persona, contexts, toneLevel);
-    }
-
-    /**
      * Build dynamic blocks (persona + context + tone) appended to a custom core prompt.
      * Used by MultiModelPromptBuilder for the final model's distinct system prompt.
      */
@@ -167,44 +135,6 @@ public class PromptBuilder {
 
         // Tone block
         sb.append(TONE_BLOCKS.getOrDefault(toneLevel, ""));
-
-        return sb.toString();
-    }
-
-    public String buildPartialRewriteUserMessage(String selectedText,
-                                                  String fullContext,
-                                                  Persona persona,
-                                                  List<SituationContext> contexts,
-                                                  ToneLevel toneLevel,
-                                                  String userPrompt,
-                                                  String senderInfo,
-                                                  String analysisContext) {
-        String contextStr = contexts.stream()
-                .map(CONTEXT_LABELS::get)
-                .collect(Collectors.joining(", "));
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("[부분 재변환]\n");
-        sb.append("받는 사람: ").append(PERSONA_LABELS.get(persona)).append("\n");
-        sb.append("상황: ").append(contextStr).append("\n");
-        sb.append("말투 강도: ").append(TONE_LABELS.get(toneLevel)).append("\n");
-
-        if (senderInfo != null && !senderInfo.isBlank()) {
-            sb.append("보내는 사람: ").append(senderInfo).append("\n");
-        }
-
-        if (analysisContext != null && !analysisContext.isBlank()) {
-            sb.append("\n--- 사전 분석 결과 ---\n");
-            sb.append(analysisContext);
-            sb.append("\n--- 사전 분석 끝 ---\n\n");
-        }
-
-        sb.append("전체 문맥:\n").append(fullContext).append("\n");
-        sb.append("다시 작성할 부분: ").append(selectedText);
-
-        if (userPrompt != null && !userPrompt.isBlank()) {
-            sb.append("\n참고 맥락: ").append(userPrompt);
-        }
 
         return sb.toString();
     }

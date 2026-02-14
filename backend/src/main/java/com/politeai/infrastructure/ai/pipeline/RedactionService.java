@@ -42,6 +42,7 @@ public class RedactionService {
         Map<SegmentLabel, Integer> redCounters = new HashMap<>();
         int redCount = 0;
         int yellowCount = 0;
+        int skippedCount = 0;
 
         // Build segment position lookup by ID
         Map<String, Segment> segmentMap = segments.stream()
@@ -67,8 +68,9 @@ public class RedactionService {
 
             // Safety: verify position is within bounds
             if (start < 0 || end > sb.length() || start >= end) {
-                log.warn("[Redaction] Out-of-bounds position for {}: start={}, end={}, textLen={}",
-                        ls.segmentId(), start, end, sb.length());
+                log.error("[Redaction] Out-of-bounds segment {} (tier={}): start={}, end={}, textLen={} — skipping (not counted in stats)",
+                        ls.segmentId(), tier, start, end, sb.length());
+                skippedCount++;
                 continue;
             }
 
@@ -81,13 +83,17 @@ public class RedactionService {
                     redCount++;
                 }
                 case YELLOW -> {
-                    sb.replace(start, end, "[SOFTEN: " + seg.text() + "]");
+                    sb.replace(start, end, "[SOFTEN:" + ls.label().name() + ": " + seg.text() + "]");
                     yellowCount++;
                 }
                 case GREEN -> {
                     // No modification — left as-is
                 }
             }
+        }
+
+        if (skippedCount > 0) {
+            log.warn("[Redaction] {} segments had out-of-bounds positions and were skipped", skippedCount);
         }
 
         log.info("[Redaction] RED={}, YELLOW={}, GREEN={}", redCount, yellowCount,

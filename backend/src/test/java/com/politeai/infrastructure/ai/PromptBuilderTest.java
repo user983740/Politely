@@ -14,6 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PromptBuilderTest {
 
     private PromptBuilder promptBuilder;
+    private static final String TEST_CORE = "테스트 코어 프롬프트";
 
     @BeforeEach
     void setUp() {
@@ -21,17 +22,17 @@ class PromptBuilderTest {
     }
 
     @Test
-    @DisplayName("동적 시스템 프롬프트: 코어 + persona + context + tone 포함")
-    void buildSystemPrompt_동적_조립() {
-        String prompt = promptBuilder.buildSystemPrompt(
+    @DisplayName("동적 블록 조립: 코어 + persona + context + tone 포함")
+    void buildDynamicBlocks_동적_조립() {
+        String prompt = promptBuilder.buildDynamicBlocks(
+                TEST_CORE,
                 Persona.BOSS,
                 List.of(SituationContext.APOLOGY, SituationContext.SCHEDULE_DELAY),
                 ToneLevel.POLITE
         );
 
         // Core prompt
-        assertThat(prompt).contains("한국어 커뮤니케이션 전문가");
-        assertThat(prompt).contains("{{LOCKED_N}}");
+        assertThat(prompt).contains(TEST_CORE);
 
         // Persona block
         assertThat(prompt).contains("직장 상사");
@@ -46,9 +47,10 @@ class PromptBuilderTest {
     }
 
     @Test
-    @DisplayName("동적 시스템 프롬프트 토큰 수 검증 (합리적 범위 내)")
-    void buildSystemPrompt_토큰_검증() {
-        String prompt = promptBuilder.buildSystemPrompt(
+    @DisplayName("동적 블록 토큰 수 검증 (합리적 범위 내)")
+    void buildDynamicBlocks_토큰_검증() {
+        String prompt = promptBuilder.buildDynamicBlocks(
+                TEST_CORE,
                 Persona.BOSS,
                 List.of(SituationContext.REQUEST, SituationContext.APOLOGY, SituationContext.URGING),
                 ToneLevel.VERY_POLITE
@@ -56,46 +58,15 @@ class PromptBuilderTest {
 
         int estimatedTokens = (int) (prompt.length() / 1.5);
         assertThat(estimatedTokens).isLessThan(1500);
-        assertThat(estimatedTokens).isGreaterThan(200);
-    }
-
-    @Test
-    @DisplayName("기존 대비 93% 감소 확인")
-    void buildSystemPrompt_크기비교() {
-        String dynamicPrompt = promptBuilder.buildSystemPrompt(
-                Persona.BOSS,
-                List.of(SituationContext.APOLOGY),
-                ToneLevel.POLITE
-        );
-
-        assertThat(dynamicPrompt.length()).isLessThan(2000);
-    }
-
-    @Test
-    @DisplayName("부분 재변환 사용자 메시지")
-    void buildPartialRewriteUserMessage() {
-        String message = promptBuilder.buildPartialRewriteUserMessage(
-                "이 부분만 바꿔주세요",
-                "전체 문맥이 여기 있습니다. 이 부분만 바꿔주세요. 나머지는 유지.",
-                Persona.BOSS,
-                List.of(SituationContext.REQUEST),
-                ToneLevel.POLITE,
-                null,
-                "마케팅팀 김민수",
-                null
-        );
-
-        assertThat(message).contains("[부분 재변환]");
-        assertThat(message).contains("전체 문맥");
-        assertThat(message).contains("다시 작성할 부분");
-        assertThat(message).contains("마케팅팀 김민수");
+        assertThat(estimatedTokens).isGreaterThan(50);
     }
 
     @Test
     @DisplayName("각 Persona에 대해 블록이 존재")
     void 모든_Persona_블록_존재() {
         for (Persona persona : Persona.values()) {
-            String prompt = promptBuilder.buildSystemPrompt(
+            String prompt = promptBuilder.buildDynamicBlocks(
+                    TEST_CORE,
                     persona,
                     List.of(SituationContext.REQUEST),
                     ToneLevel.POLITE
@@ -108,7 +79,8 @@ class PromptBuilderTest {
     @DisplayName("각 ToneLevel에 대해 블록이 존재")
     void 모든_ToneLevel_블록_존재() {
         for (ToneLevel tone : ToneLevel.values()) {
-            String prompt = promptBuilder.buildSystemPrompt(
+            String prompt = promptBuilder.buildDynamicBlocks(
+                    TEST_CORE,
                     Persona.BOSS,
                     List.of(SituationContext.REQUEST),
                     tone

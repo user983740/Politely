@@ -3,7 +3,6 @@ import { apiClient } from '@/shared/api';
 export interface TierInfo {
   tier: 'FREE' | 'PAID';
   maxTextLength: number;
-  partialRewriteEnabled: boolean;
   promptEnabled: boolean;
 }
 

@@ -170,12 +170,12 @@ class OutputValidatorTest {
         @Test
         void 플레이스홀더_누락시_ERROR() {
             List<LockedSpan> spans = List.of(
-                    new LockedSpan(0, "2024년 2월 4일", "{{LOCKED_0}}", LockedSpanType.DATE, 0, 11),
-                    new LockedSpan(1, "150,000원", "{{LOCKED_1}}", LockedSpanType.MONEY, 13, 22)
+                    new LockedSpan(1, "2024년 2월 4일", "{{DATE_1}}", LockedSpanType.DATE, 0, 11),
+                    new LockedSpan(1, "150,000원", "{{MONEY_1}}", LockedSpanType.MONEY, 13, 22)
             );
 
-            // maskedOutput에서 LOCKED_1이 누락
-            String maskedOutput = "{{LOCKED_0}}에 입금해 주시면 감사하겠습니다.";
+            // maskedOutput에서 MONEY_1이 누락
+            String maskedOutput = "{{DATE_1}}에 입금해 주시면 감사하겠습니다.";
             String output = "2024년 2월 4일에 입금해 주시면 감사하겠습니다.";
 
             ValidationResult result = validateWithSpans(output, "원문", spans, maskedOutput, Persona.BOSS);
@@ -186,10 +186,10 @@ class OutputValidatorTest {
         @Test
         void 모든_플레이스홀더_존재시_통과() {
             List<LockedSpan> spans = List.of(
-                    new LockedSpan(0, "2024년 2월 4일", "{{LOCKED_0}}", LockedSpanType.DATE, 0, 11)
+                    new LockedSpan(1, "2024년 2월 4일", "{{DATE_1}}", LockedSpanType.DATE, 0, 11)
             );
 
-            String maskedOutput = "{{LOCKED_0}}에 만나요";
+            String maskedOutput = "{{DATE_1}}에 만나요";
             String output = "2024년 2월 4일에 만나요";
 
             ValidationResult result = validateWithSpans(output, "원문", spans, maskedOutput, Persona.BOSS);
@@ -200,7 +200,7 @@ class OutputValidatorTest {
         @Test
         void 원본텍스트가_maskedOutput에_있으면_통과() {
             List<LockedSpan> spans = List.of(
-                    new LockedSpan(0, "150,000원", "{{LOCKED_0}}", LockedSpanType.MONEY, 0, 9)
+                    new LockedSpan(1, "150,000원", "{{MONEY_1}}", LockedSpanType.MONEY, 0, 9)
             );
 
             // LLM이 플레이스홀더 대신 원본을 그대로 출력

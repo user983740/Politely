@@ -6,7 +6,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -25,14 +27,14 @@ public class LockedSpanExtractor {
      * Patterns in priority order (higher priority = earlier in list).
      */
     private static final List<PatternEntry> PATTERNS = List.of(
-            // 1. Email
+            // 1. Email — require word char before @, valid TLD (2+ chars)
             new PatternEntry(
-                    Pattern.compile("[\\w.+\\-]+@[\\w\\-]+\\.[\\w.]+"),
+                    Pattern.compile("[\\w]+(?:[.+\\-][\\w]+)*@[\\w]+(?:[\\-][\\w]+)*\\.[a-zA-Z]{2,}"),
                     LockedSpanType.EMAIL
             ),
-            // 2. URL
+            // 2. URL — exclude trailing punctuation (.,:;) that's not part of URL
             new PatternEntry(
-                    Pattern.compile("(?:https?://|www\\.)[\\w\\-.~:/?#\\[\\]@!$&'()*+,;=%]+"),
+                    Pattern.compile("(?:https?://|www\\.)[\\w\\-.~:/?#\\[\\]@!$&'()*+,;=%]+[\\w/=]"),
                     LockedSpanType.URL
             ),
             // 3. Phone number (before account to avoid false matches)
@@ -55,9 +57,9 @@ public class LockedSpanExtractor {
                     Pattern.compile("(?:오전|오후|새벽|저녁|밤)?\\s*\\d{1,2}(?:시\\s*\\d{1,2}분?)?(?:\\s*~\\s*\\d{1,2}(?:시(?:\\s*\\d{1,2}분?)?)?)?(?:시|분)"),
                     LockedSpanType.TIME
             ),
-            // 7. HH:MM
+            // 7. HH:MM — validate hour range (0-23)
             new PatternEntry(
-                    Pattern.compile("\\d{1,2}:\\d{2}"),
+                    Pattern.compile("(?:[01]?\\d|2[0-3]):\\d{2}"),
                     LockedSpanType.TIME_HH_MM
             ),
             // 8. Money ("10만원", "150,000원")
@@ -100,9 +102,9 @@ public class LockedSpanExtractor {
                     Pattern.compile("\"([^\"]{2,60})\"|'([^']{2,60})'|\u201C([^\u201C\u201D]{2,60})\u201D|\u2018([^\u2018\u2019]{2,60})\u2019"),
                     LockedSpanType.QUOTED_TEXT
             ),
-            // 16. Identifiers: camelCase, snake_case, PascalCase (>=4 chars), fn()
+            // 16. Identifiers: camelCase (>=5 chars), snake_case (2+ segments), PascalCase with fn()
             new PatternEntry(
-                    Pattern.compile("\\b(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*|[A-Z][a-z][a-zA-Z0-9]{2,}|[a-z]+(?:_[a-z]+)+)(?:\\(\\))?\\b"),
+                    Pattern.compile("\\b(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]{2,}|[a-z]+(?:_[a-z]+){1,}|[A-Z][a-z]+(?:[A-Z][a-z]+)+)(?:\\(\\))?\\b"),
                     LockedSpanType.IDENTIFIER
             ),
             // 17. Git commit hashes (7-40 hex chars)
@@ -146,14 +148,16 @@ public class LockedSpanExtractor {
         // Remove overlapping matches (keep the longer one)
         List<RawMatch> resolved = resolveOverlaps(rawMatches);
 
-        // Convert to LockedSpan with index and placeholder
+        // Convert to LockedSpan with type-specific placeholder (e.g., {{DATE_1}}, {{PHONE_2}})
         List<LockedSpan> spans = new ArrayList<>();
-        for (int i = 0; i < resolved.size(); i++) {
-            RawMatch m = resolved.get(i);
+        Map<String, Integer> prefixCounters = new HashMap<>();
+        for (RawMatch m : resolved) {
+            String prefix = m.type.placeholderPrefix();
+            int counter = prefixCounters.merge(prefix, 1, Integer::sum);
             spans.add(new LockedSpan(
-                    i,
+                    counter,
                     m.text,
-                    "{{LOCKED_" + i + "}}",
+                    "{{" + prefix + "_" + counter + "}}",
                     m.type,
                     m.start,
                     m.end

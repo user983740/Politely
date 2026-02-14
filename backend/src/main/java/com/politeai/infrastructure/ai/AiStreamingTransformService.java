@@ -7,7 +7,6 @@ import com.openai.models.chat.completions.ChatCompletionChunk;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.models.chat.completions.ChatCompletionStreamOptions;
 import com.politeai.domain.transform.model.*;
-import com.politeai.domain.user.model.UserTier;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.AnalysisPhaseResult;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.FinalPromptPair;
@@ -38,7 +37,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class AiStreamingTransformService {
 
     private final OpenAIClient openAIClient;
-    private final PromptBuilder promptBuilder;
     private final MultiModelPipeline multiModelPipeline;
     private final LockedSpanMasker spanMasker;
     private final OutputValidator outputValidator;
@@ -77,8 +75,8 @@ public class AiStreamingTransformService {
                                       String originalText,
                                       String userPrompt,
                                       String senderInfo,
-                                      UserTier tier,
-                                      boolean identityBoosterToggle) {
+                                      boolean identityBoosterToggle,
+                                      int finalMaxTokens) {
         SseEmitter emitter = new SseEmitter(120_000L);
 
         executor.execute(() -> {
@@ -175,7 +173,7 @@ public class AiStreamingTransformService {
                 // 3. Stream final model
                 emitter.send(SseEmitter.event().name("phase").data("generating"));
                 FinalStreamResult finalResult = streamFinalModel(model, prompt.systemPrompt(), prompt.userMessage(),
-                        prompt.lockedSpans(), emitter);
+                        prompt.lockedSpans(), finalMaxTokens, emitter);
 
                 // 4. Validate output
                 emitter.send(SseEmitter.event().name("phase").data("validating"));
@@ -192,13 +190,16 @@ public class AiStreamingTransformService {
                             validation.errors().stream().map(ValidationIssue::message).toList());
                     retryCount = 1;
 
+                    // Signal client to discard previous delta output before retry
+                    emitter.send(SseEmitter.event().name("retry").data("validation_failed"));
+
                     String errorHint = "\n\n[시스템 검증 오류] " + String.join("; ",
                             validation.errors().stream().map(ValidationIssue::message).toList());
                     String retryUser = prompt.userMessage() + errorHint;
 
                     // Re-stream the retry
                     activeResult = streamFinalModel(model, prompt.systemPrompt(), retryUser,
-                            prompt.lockedSpans(), emitter);
+                            prompt.lockedSpans(), finalMaxTokens, emitter);
 
                     // Re-validate the retry result
                     validation = outputValidator.validate(
@@ -206,7 +207,7 @@ public class AiStreamingTransformService {
                             activeResult.rawContent, persona, prompt.redactionMap());
                 }
 
-                // 6a. Send validation issues
+                // 6a. Send validation issues (use safeSend to handle client disconnect gracefully)
                 List<Map<String, Object>> issuesData = validation.issues().stream()
                         .map(issue -> {
                             Map<String, Object> m = new LinkedHashMap<>();
@@ -217,11 +218,8 @@ public class AiStreamingTransformService {
                             return m;
                         })
                         .toList();
-                emitter.send(SseEmitter.event()
-                        .name("validationIssues")
-                        .data(objectMapper.writeValueAsString(issuesData)));
-
-                emitter.send(SseEmitter.event().name("phase").data("complete"));
+                if (!safeSend(emitter, "validationIssues", objectMapper.writeValueAsString(issuesData))) return;
+                if (!safeSend(emitter, "phase", "complete")) return;
 
                 // 5. Send stats event
                 long totalLatency = System.currentTimeMillis() - startTime;
@@ -235,9 +233,7 @@ public class AiStreamingTransformService {
                 statsData.put("identityBoosterFired", analysis.identityBoosterFired());
                 statsData.put("relationIntentFired", analysis.relationIntentFired());
                 statsData.put("latencyMs", totalLatency);
-                emitter.send(SseEmitter.event()
-                        .name("stats")
-                        .data(objectMapper.writeValueAsString(statsData)));
+                if (!safeSend(emitter, "stats", objectMapper.writeValueAsString(statsData))) return;
 
                 // 8. Send usage event
                 long analysisPrompt = analysis.totalAnalysisPromptTokens();
@@ -260,46 +256,15 @@ public class AiStreamingTransformService {
                         "growth", totalCost * 6000,
                         "mature", totalCost * 20000
                 ));
-
-                emitter.send(SseEmitter.event()
-                        .name("usage")
-                        .data(objectMapper.writeValueAsString(usageData)));
+                if (!safeSend(emitter, "usage", objectMapper.writeValueAsString(usageData))) return;
 
                 // 9. Send done event
-                emitter.send(SseEmitter.event()
-                        .name("done")
-                        .data(activeResult.unmaskedText));
-                emitter.complete();
+                if (safeSend(emitter, "done", activeResult.unmaskedText)) {
+                    emitter.complete();
+                }
 
             } catch (Exception e) {
                 log.error("Streaming transform failed", e);
-                sendError(emitter, "AI 변환 서비스에 일시적인 오류가 발생했습니다.");
-            }
-        });
-
-        return emitter;
-    }
-
-    public SseEmitter streamPartialRewrite(String selectedText,
-                                           String fullContext,
-                                           Persona persona,
-                                           List<SituationContext> contexts,
-                                           ToneLevel toneLevel,
-                                           String userPrompt,
-                                           String senderInfo,
-                                           String analysisContext) {
-        SseEmitter emitter = new SseEmitter(120_000L);
-
-        executor.execute(() -> {
-            try {
-                String systemPrompt = promptBuilder.buildSystemPrompt(persona, contexts, toneLevel);
-                String userMessage = promptBuilder.buildPartialRewriteUserMessage(
-                        selectedText, fullContext, persona, contexts, toneLevel,
-                        userPrompt, senderInfo, analysisContext);
-
-                streamOpenAI(model, systemPrompt, userMessage, emitter);
-            } catch (Exception e) {
-                log.error("Streaming partial rewrite failed", e);
                 sendError(emitter, "AI 변환 서비스에 일시적인 오류가 발생했습니다.");
             }
         });
@@ -314,11 +279,11 @@ public class AiStreamingTransformService {
      * Does NOT send done/complete — caller handles that after sending usage.
      */
     private FinalStreamResult streamFinalModel(String modelName, String systemPrompt, String userMessage,
-                                                List<LockedSpan> lockedSpans, SseEmitter emitter) throws IOException {
+                                                List<LockedSpan> lockedSpans, int maxTok, SseEmitter emitter) throws IOException {
         ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
                 .model(modelName)
                 .temperature(temperature)
-                .maxCompletionTokens(maxTokens)
+                .maxCompletionTokens(maxTok)
                 .addSystemMessage(systemPrompt)
                 .addUserMessage(userMessage)
                 .streamOptions(ChatCompletionStreamOptions.builder()
@@ -375,62 +340,16 @@ public class AiStreamingTransformService {
     }
 
     /**
-     * Simple streaming without pipeline (used for partial rewrite).
+     * Send an SSE event, returning false if the client has disconnected.
+     * Prevents cascading IOExceptions when the client drops mid-stream.
      */
-    private void streamOpenAI(String modelName, String systemPrompt, String userMessage,
-                               SseEmitter emitter) throws IOException {
-        ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
-                .model(modelName)
-                .temperature(temperature)
-                .maxCompletionTokens(maxTokens)
-                .addSystemMessage(systemPrompt)
-                .addUserMessage(userMessage)
-                .streamOptions(ChatCompletionStreamOptions.builder()
-                        .includeUsage(true)
-                        .build())
-                .build();
-
-        StringBuilder fullContent = new StringBuilder();
-        AtomicBoolean clientDisconnected = new AtomicBoolean(false);
-
-        try (StreamResponse<ChatCompletionChunk> stream =
-                     openAIClient.chat().completions().createStreaming(params)) {
-
-            stream.stream().forEach(chunk -> {
-                chunk.usage().ifPresent(usage -> {
-                    log.info("Streaming token usage - prompt: {}, completion: {}, total: {}",
-                            usage.promptTokens(), usage.completionTokens(), usage.totalTokens());
-                    long cachedTokens = usage.promptTokensDetails()
-                            .map(d -> d.cachedTokens().orElse(0L))
-                            .orElse(0L);
-                    cacheMetrics.recordUsage(usage.promptTokens(), cachedTokens);
-                });
-
-                chunk.choices().forEach(choice -> {
-                    choice.delta().content().ifPresent(content -> {
-                        if (!content.isEmpty()) {
-                            fullContent.append(content);
-                            if (!clientDisconnected.get()) {
-                                try {
-                                    emitter.send(SseEmitter.event()
-                                            .name("delta")
-                                            .data(content));
-                                } catch (IOException e) {
-                                    clientDisconnected.set(true);
-                                    log.warn("Client disconnected during partial rewrite streaming");
-                                }
-                            }
-                        }
-                    });
-                });
-            });
-        }
-
-        if (!clientDisconnected.get()) {
-            emitter.send(SseEmitter.event()
-                    .name("done")
-                    .data(fullContent.toString().trim()));
-            emitter.complete();
+    private boolean safeSend(SseEmitter emitter, String eventName, String data) {
+        try {
+            emitter.send(SseEmitter.event().name(eventName).data(data));
+            return true;
+        } catch (IOException e) {
+            log.debug("Client disconnected, skipping remaining SSE events (failed on '{}')", eventName);
+            return false;
         }
     }
 

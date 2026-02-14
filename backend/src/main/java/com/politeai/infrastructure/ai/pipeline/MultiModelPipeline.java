@@ -1,32 +1,35 @@
 package com.politeai.infrastructure.ai.pipeline;
 
 import com.politeai.domain.transform.model.*;
+import com.politeai.infrastructure.ai.AiTransformException;
 import com.politeai.infrastructure.ai.AiTransformService;
 import com.politeai.infrastructure.ai.LlmCallResult;
 import com.politeai.infrastructure.ai.preprocessing.LockedSpanExtractor;
 import com.politeai.infrastructure.ai.preprocessing.LockedSpanMasker;
 import com.politeai.infrastructure.ai.preprocessing.TextNormalizer;
+import com.politeai.infrastructure.ai.segmentation.LlmSegmentRefiner;
 import com.politeai.infrastructure.ai.segmentation.MeaningSegmenter;
 import com.politeai.infrastructure.ai.validation.OutputValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 /**
  * Multi-model pipeline orchestrator (v2).
  *
  * Pipeline:
  *   A) normalize → B) extract+mask (enhanced regex) → C) segment (server)
+ *   → C') refine long segments (LLM, conditional)
  *   → D) structureLabel (LLM #1) → E?) identityBooster (gating)
  *   → F?) relationIntent (gating) → G) redact (server)
  *   → H) Final LLM #2 → I) unmask → validate → (ERROR: 1 retry)
  *
- * Base case: 2 LLM calls. With gating: up to 4.
+ * Base case: 2 LLM calls (+1 if long segments). With gating: up to 5.
  */
 @Slf4j
 @Component
@@ -64,6 +67,7 @@ public class MultiModelPipeline {
     private final MultiModelPromptBuilder multiPromptBuilder;
     private final AiTransformService aiTransformService;
     private final MeaningSegmenter meaningSegmenter;
+    private final LlmSegmentRefiner llmSegmentRefiner;
     private final StructureLabelService structureLabelService;
     private final RedactionService redactionService;
     private final GatingConditionEvaluator gatingEvaluator;
@@ -120,8 +124,13 @@ public class MultiModelPipeline {
         try {
             return executeAnalysis(persona, contexts, toneLevel, originalText,
                     userPrompt, senderInfo, identityBoosterToggle, PipelineProgressCallback.noop());
+        } catch (AiTransformException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Pipeline analysis failed", e);
+            if (e.getCause() instanceof AiTransformException ate) {
+                throw ate;
+            }
+            throw new AiTransformException("파이프라인 분석 중 오류가 발생했습니다.", e);
         }
     }
 
@@ -172,24 +181,56 @@ public class MultiModelPipeline {
             callback.onPhase("identity_skipped");
         }
 
-        // C) Segment (server-side, no LLM)
+        // C) Segment (server-side, rule-based)
         callback.onPhase("segmenting");
         List<Segment> segments = meaningSegmenter.segment(masked);
+
+        // C') Refine long segments with LLM (conditional — only if segments > threshold exist)
+        LlmSegmentRefiner.RefineResult refineResult = llmSegmentRefiner.refine(segments, masked);
+        boolean segmentRefinerFired = refineResult.promptTokens() > 0;
+        if (segmentRefinerFired) {
+            callback.onPhase("segment_refining");
+            segments = refineResult.segments();
+            totalPromptTokens += refineResult.promptTokens();
+            totalCompletionTokens += refineResult.completionTokens();
+        } else {
+            callback.onPhase("segment_refining_skipped");
+        }
         callback.onSegmented(segments);
 
-        // D) Structure Label (LLM #1)
+        // Pre-evaluate F? gating before starting D
+        boolean shouldFireRelation = gatingEvaluator.shouldFireRelationIntent(persona, normalized);
+
+        // D) Structure Label (LLM #1) + F?) Relation/Intent — run in parallel
         callback.onPhase("labeling");
+
+        // Launch F? async if gating condition met (runs in parallel with D)
+        CompletableFuture<RelationIntentService.RelationIntentResult> relationFuture = null;
+        if (shouldFireRelation) {
+            final String maskedForRelation = masked;
+            relationFuture = CompletableFuture.supplyAsync(() ->
+                    relationIntentService.analyze(persona, contexts, toneLevel, maskedForRelation, userPrompt, senderInfo));
+        }
+
+        // D runs on main thread
         StructureLabelService.StructureLabelResult labelResult = structureLabelService.label(
                 persona, contexts, toneLevel, userPrompt, senderInfo, segments, masked);
         totalPromptTokens += labelResult.promptTokens();
         totalCompletionTokens += labelResult.completionTokens();
         callback.onLabeled(labelResult.labeledSegments());
 
-        // F?) Relation/Intent (gating)
+        // Collect F? result (already completed or near-completion from parallel execution)
         RelationIntentService.RelationIntentResult relationResult = null;
-        if (gatingEvaluator.shouldFireRelationIntent(persona, normalized)) {
+        if (shouldFireRelation) {
             callback.onPhase("relation_analyzing");
-            relationResult = relationIntentService.analyze(persona, contexts, toneLevel, masked, userPrompt, senderInfo);
+            try {
+                relationResult = relationFuture.join();
+            } catch (CompletionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof AiTransformException ate) throw ate;
+                if (cause instanceof RuntimeException re) throw re;
+                throw new AiTransformException("관계/의도 분석 중 오류가 발생했습니다.", cause);
+            }
             totalPromptTokens += relationResult.promptTokens();
             totalCompletionTokens += relationResult.completionTokens();
             relationFired = true;
@@ -249,14 +290,15 @@ public class MultiModelPipeline {
                                         List<SituationContext> contexts,
                                         ToneLevel toneLevel,
                                         String originalText,
-                                        String senderInfo) {
+                                        String senderInfo,
+                                        int maxTokens) {
         long startTime = System.currentTimeMillis();
 
         FinalPromptPair prompt = buildFinalPrompt(analysis, persona, contexts, toneLevel, senderInfo);
 
         // Call Final model (LLM #2)
         LlmCallResult finalResult = aiTransformService.callOpenAIWithModel(
-                finalModelName, prompt.systemPrompt(), prompt.userMessage(), -1, -1, null);
+                finalModelName, prompt.systemPrompt(), prompt.userMessage(), -1, maxTokens, null);
 
         // Unmask
         LockedSpanMasker.UnmaskResult unmaskResult = spanMasker.unmask(
@@ -280,7 +322,7 @@ public class MultiModelPipeline {
             String retryUser = prompt.userMessage() + errorHint;
 
             LlmCallResult retryResult = aiTransformService.callOpenAIWithModel(
-                    finalModelName, prompt.systemPrompt(), retryUser, -1, -1, null);
+                    finalModelName, prompt.systemPrompt(), retryUser, -1, maxTokens, null);
             LockedSpanMasker.UnmaskResult retryUnmask = spanMasker.unmask(
                     retryResult.content(), prompt.lockedSpans());
             validation = outputValidator.validate(
@@ -309,25 +351,5 @@ public class MultiModelPipeline {
         );
 
         return new PipelineResult(unmaskResult.text(), validation.issues(), stats);
-    }
-
-    // === Utility ===
-
-    private boolean overlapsAny(int start, int end, List<LockedSpan> spans) {
-        for (LockedSpan span : spans) {
-            if (start < span.endPos() && end > span.startPos()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private LlmCallResult safeGet(CompletableFuture<LlmCallResult> future, String label) {
-        try {
-            return future.join();
-        } catch (Exception e) {
-            log.warn("[Pipeline] {} failed, using empty fallback: {}", label, e.getMessage());
-            return new LlmCallResult("", null, 0, 0);
-        }
     }
 }

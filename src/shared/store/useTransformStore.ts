@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
-import type { TierInfo } from '@/features/transform/api';
 import type { LabelData, StatsData, UsageInfo, SegmentData, RelationIntentData, ValidationIssueData, PipelinePhase } from '@/features/transform/stream-api';
 
 interface TransformState {
@@ -22,7 +21,6 @@ interface TransformState {
   currentPhase: PipelinePhase | null;
   isTransforming: boolean;
   transformError: string | null;
-  tierInfo: TierInfo | null;
   usageInfo: UsageInfo | null;
   setPersona: (persona: Persona | null) => void;
   toggleContext: (context: Context) => void;
@@ -43,7 +41,6 @@ interface TransformState {
   setCurrentPhase: (phase: PipelinePhase | null) => void;
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
-  setTierInfo: (info: TierInfo) => void;
   setUsageInfo: (info: UsageInfo | null) => void;
   resetForNewInput: () => void;
   reset: () => void;
@@ -68,7 +65,6 @@ const initialState = {
   currentPhase: null as PipelinePhase | null,
   isTransforming: false,
   transformError: null as string | null,
-  tierInfo: null as TierInfo | null,
   usageInfo: null as UsageInfo | null,
 };
 
@@ -99,7 +95,6 @@ export const useTransformStore = create<TransformState>((set) => ({
   setCurrentPhase: (currentPhase) => set({ currentPhase }),
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
-  setTierInfo: (tierInfo) => set({ tierInfo }),
   setUsageInfo: (usageInfo) => set({ usageInfo }),
   resetForNewInput: () =>
     set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, relationIntent: null, processedText: null, validationIssues: null, currentPhase: null, transformError: null, usageInfo: null }),
