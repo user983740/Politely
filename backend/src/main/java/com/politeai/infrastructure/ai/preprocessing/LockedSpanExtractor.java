@@ -27,9 +27,9 @@ public class LockedSpanExtractor {
      * Patterns in priority order (higher priority = earlier in list).
      */
     private static final List<PatternEntry> PATTERNS = List.of(
-            // 1. Email — require word char before @, valid TLD (2+ chars)
+            // 1. Email — require word char before @, support compound TLDs (.co.kr, .ac.uk)
             new PatternEntry(
-                    Pattern.compile("[\\w]+(?:[.+\\-][\\w]+)*@[\\w]+(?:[\\-][\\w]+)*\\.[a-zA-Z]{2,}"),
+                    Pattern.compile("[\\w]+(?:[.+\\-][\\w]+)*@[\\w]+(?:[\\-][\\w]+)*(?:\\.[a-zA-Z]{2,})+"),
                     LockedSpanType.EMAIL
             ),
             // 2. URL — exclude trailing punctuation (.,:;) that's not part of URL

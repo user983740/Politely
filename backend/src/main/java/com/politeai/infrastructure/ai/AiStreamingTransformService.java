@@ -12,6 +12,7 @@ import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.AnalysisPhaseR
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.FinalPromptPair;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.PipelineProgressCallback;
 import com.politeai.infrastructure.ai.pipeline.RelationIntentService;
+import com.politeai.infrastructure.ai.pipeline.template.StructureTemplate;
 import com.politeai.infrastructure.ai.preprocessing.LockedSpanMasker;
 import com.politeai.infrastructure.ai.validation.OutputValidator;
 import lombok.RequiredArgsConstructor;
@@ -76,6 +77,8 @@ public class AiStreamingTransformService {
                                       String userPrompt,
                                       String senderInfo,
                                       boolean identityBoosterToggle,
+                                      Topic topic,
+                                      Purpose purpose,
                                       int finalMaxTokens) {
         SseEmitter emitter = new SseEmitter(120_000L);
 
@@ -154,17 +157,39 @@ public class AiStreamingTransformService {
                     }
 
                     @Override
-                    public void onRedacted(String processedText) throws Exception {
+                    public void onRedacted(List<LabeledSegment> labeledSegments, int redCount) throws Exception {
+                        // Send processedSegments event with tier/label info for TracePanel
+                        List<Map<String, Object>> segData = labeledSegments.stream()
+                                .map(ls -> {
+                                    Map<String, Object> m = new LinkedHashMap<>();
+                                    m.put("id", ls.segmentId());
+                                    m.put("tier", ls.label().tier().name());
+                                    m.put("label", ls.label().name());
+                                    m.put("text", ls.label().tier() == SegmentLabel.Tier.RED ? null : ls.text());
+                                    return m;
+                                })
+                                .toList();
                         emitter.send(SseEmitter.event()
-                                .name("processedText")
-                                .data(processedText));
+                                .name("processedSegments")
+                                .data(objectMapper.writeValueAsString(segData)));
+                    }
+
+                    @Override
+                    public void onTemplateSelected(StructureTemplate template, boolean gatingFired) throws Exception {
+                        Map<String, Object> templateData = new LinkedHashMap<>();
+                        templateData.put("templateId", template.id());
+                        templateData.put("templateName", template.name());
+                        templateData.put("contextGatingFired", gatingFired);
+                        emitter.send(SseEmitter.event()
+                                .name("templateSelected")
+                                .data(objectMapper.writeValueAsString(templateData)));
                     }
                 };
 
                 // 1. Run analysis phase with real-time progress callbacks
                 AnalysisPhaseResult analysis = multiModelPipeline.executeAnalysis(
                         persona, contexts, toneLevel, originalText, userPrompt, senderInfo,
-                        identityBoosterToggle, progressCallback);
+                        identityBoosterToggle, topic, purpose, progressCallback);
 
                 // 2. Build final prompt
                 FinalPromptPair prompt = multiModelPipeline.buildFinalPrompt(
@@ -177,14 +202,22 @@ public class AiStreamingTransformService {
 
                 // 4. Validate output
                 emitter.send(SseEmitter.event().name("phase").data("validating"));
+
+                // Extract YELLOW segment texts for Rule 11
+                List<String> yellowTexts = analysis.labeledSegments().stream()
+                        .filter(s -> s.label().tier() == SegmentLabel.Tier.YELLOW)
+                        .map(LabeledSegment::text)
+                        .toList();
+
                 ValidationResult validation = outputValidator.validate(
                         finalResult.unmaskedText, originalText, prompt.lockedSpans(),
-                        finalResult.rawContent, persona, prompt.redactionMap());
+                        finalResult.rawContent, persona, prompt.redactionMap(), yellowTexts,
+                        analysis.chosenTemplate(), analysis.effectiveSections(), analysis.labeledSegments());
 
                 int retryCount = 0;
                 FinalStreamResult activeResult = finalResult;
 
-                // Retry once on ERROR
+                // Retry once on ERROR only (no WARNING retry for streaming — delta already sent)
                 if (!validation.passed()) {
                     log.warn("[Streaming] Validation errors: {}, retrying once",
                             validation.errors().stream().map(ValidationIssue::message).toList());
@@ -193,9 +226,13 @@ public class AiStreamingTransformService {
                     // Signal client to discard previous delta output before retry
                     emitter.send(SseEmitter.event().name("retry").data("validation_failed"));
 
+                    // Build specific locked span hint if applicable
+                    String lockedSpanHint = outputValidator.buildLockedSpanRetryHint(
+                            validation.issues(), prompt.lockedSpans());
+
                     String errorHint = "\n\n[시스템 검증 오류] " + String.join("; ",
                             validation.errors().stream().map(ValidationIssue::message).toList());
-                    String retryUser = prompt.userMessage() + errorHint;
+                    String retryUser = prompt.userMessage() + errorHint + lockedSpanHint;
 
                     // Re-stream the retry
                     activeResult = streamFinalModel(model, prompt.systemPrompt(), retryUser,
@@ -204,7 +241,8 @@ public class AiStreamingTransformService {
                     // Re-validate the retry result
                     validation = outputValidator.validate(
                             activeResult.unmaskedText, originalText, prompt.lockedSpans(),
-                            activeResult.rawContent, persona, prompt.redactionMap());
+                            activeResult.rawContent, persona, prompt.redactionMap(), yellowTexts,
+                            analysis.chosenTemplate(), analysis.effectiveSections(), analysis.labeledSegments());
                 }
 
                 // 6a. Send validation issues (use safeSend to handle client disconnect gracefully)
@@ -232,6 +270,8 @@ public class AiStreamingTransformService {
                 statsData.put("retryCount", retryCount);
                 statsData.put("identityBoosterFired", analysis.identityBoosterFired());
                 statsData.put("relationIntentFired", analysis.relationIntentFired());
+                statsData.put("contextGatingFired", analysis.contextGatingFired());
+                statsData.put("chosenTemplateId", analysis.chosenTemplateId());
                 statsData.put("latencyMs", totalLatency);
                 if (!safeSend(emitter, "stats", objectMapper.writeValueAsString(statsData))) return;
 

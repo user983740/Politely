@@ -1,4 +1,4 @@
-import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
+import type { Persona, Context, ToneLevel, Topic, Purpose } from '@/shared/config/constants';
 import { API_BASE_URL } from '@/shared/config/constants';
 import { ApiError } from '@/shared/api/client';
 
@@ -10,6 +10,8 @@ export interface StreamTransformRequest {
   userPrompt?: string;
   senderInfo?: string;
   identityBoosterToggle?: boolean;
+  topic?: Topic;
+  purpose?: Purpose;
 }
 
 export interface LockedSpanInfo {
@@ -45,6 +47,21 @@ export interface LabelData {
   text: string;
 }
 
+export interface ProcessedSegmentItem {
+  id: string;
+  tier: 'GREEN' | 'YELLOW' | 'RED';
+  label: string;
+  text: string | null;
+}
+
+export type ProcessedSegmentsData = ProcessedSegmentItem[];
+
+export interface TemplateSelectedData {
+  templateId: string;
+  templateName: string;
+  contextGatingFired: boolean;
+}
+
 export interface StatsData {
   segmentCount: number;
   greenCount: number;
@@ -54,6 +71,8 @@ export interface StatsData {
   retryCount: number;
   identityBoosterFired: boolean;
   relationIntentFired: boolean;
+  contextGatingFired: boolean;
+  chosenTemplateId: string;
   latencyMs: number;
 }
 
@@ -79,6 +98,9 @@ export type PipelinePhase =
   | 'segment_refining'
   | 'segment_refining_skipped'
   | 'labeling'
+  | 'template_selecting'
+  | 'context_gating'
+  | 'context_gating_skipped'
   | 'relation_analyzing'
   | 'relation_skipped'
   | 'redacting'
@@ -97,8 +119,9 @@ export interface StreamCallbacks {
   onSegments?: (segments: SegmentData[]) => void;
   onMaskedText?: (text: string) => void;
   onRelationIntent?: (data: RelationIntentData) => void;
-  onProcessedText?: (text: string) => void;
+  onProcessedSegments?: (data: ProcessedSegmentsData) => void;
   onValidationIssues?: (issues: ValidationIssueData[]) => void;
+  onTemplateSelected?: (data: TemplateSelectedData) => void;
   onPhase?: (phase: PipelinePhase) => void;
   onRetry?: () => void;
 }
@@ -244,12 +267,23 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
         // ignore parse error
       }
       break;
-    case 'processedText':
-      callbacks.onProcessedText?.(data);
+    case 'processedSegments':
+      try {
+        callbacks.onProcessedSegments?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
       break;
     case 'validationIssues':
       try {
         callbacks.onValidationIssues?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'templateSelected':
+      try {
+        callbacks.onTemplateSelected?.(JSON.parse(data));
       } catch {
         // ignore parse error
       }

@@ -8,5 +8,11 @@ public enum SituationContext {
     APOLOGY,
     COMPLAINT,
     ANNOUNCEMENT,
-    FEEDBACK
+    FEEDBACK,
+    BILLING,
+    SUPPORT,
+    CONTRACT,
+    RECRUITING,
+    CIVIL_COMPLAINT,
+    GRATITUDE
 }

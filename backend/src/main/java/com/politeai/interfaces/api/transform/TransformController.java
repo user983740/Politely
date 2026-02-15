@@ -53,6 +53,8 @@ public class TransformController {
                 request.userPrompt(),
                 request.senderInfo(),
                 Boolean.TRUE.equals(request.identityBoosterToggle()),
+                request.topic(),
+                request.purpose(),
                 transformAppService.resolveFinalMaxTokens());
     }
 

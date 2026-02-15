@@ -1,11 +1,13 @@
 import { create } from 'zustand';
-import type { Persona, Context, ToneLevel } from '@/shared/config/constants';
-import type { LabelData, StatsData, UsageInfo, SegmentData, RelationIntentData, ValidationIssueData, PipelinePhase } from '@/features/transform/stream-api';
+import type { Persona, Context, ToneLevel, Topic, Purpose } from '@/shared/config/constants';
+import type { LabelData, StatsData, UsageInfo, SegmentData, RelationIntentData, ValidationIssueData, PipelinePhase, ProcessedSegmentsData, TemplateSelectedData } from '@/features/transform/stream-api';
 
 interface TransformState {
   persona: Persona | null;
   contexts: Context[];
   toneLevel: ToneLevel | null;
+  topic: Topic | null;
+  purpose: Purpose | null;
   originalText: string;
   userPrompt: string;
   senderInfo: string;
@@ -16,8 +18,9 @@ interface TransformState {
   segments: SegmentData[] | null;
   maskedText: string | null;
   relationIntent: RelationIntentData | null;
-  processedText: string | null;
+  processedSegments: ProcessedSegmentsData | null;
   validationIssues: ValidationIssueData[] | null;
+  chosenTemplate: TemplateSelectedData | null;
   currentPhase: PipelinePhase | null;
   isTransforming: boolean;
   transformError: string | null;
@@ -25,6 +28,8 @@ interface TransformState {
   setPersona: (persona: Persona | null) => void;
   toggleContext: (context: Context) => void;
   setToneLevel: (toneLevel: ToneLevel | null) => void;
+  setTopic: (topic: Topic | null) => void;
+  setPurpose: (purpose: Purpose | null) => void;
   setOriginalText: (text: string) => void;
   setUserPrompt: (prompt: string) => void;
   setSenderInfo: (info: string) => void;
@@ -36,8 +41,9 @@ interface TransformState {
   setSegments: (segments: SegmentData[] | null) => void;
   setMaskedText: (text: string | null) => void;
   setRelationIntent: (data: RelationIntentData | null) => void;
-  setProcessedText: (text: string | null) => void;
+  setProcessedSegments: (data: ProcessedSegmentsData | null) => void;
   setValidationIssues: (issues: ValidationIssueData[] | null) => void;
+  setChosenTemplate: (data: TemplateSelectedData | null) => void;
   setCurrentPhase: (phase: PipelinePhase | null) => void;
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
@@ -50,6 +56,8 @@ const initialState = {
   persona: null as Persona | null,
   contexts: [] as Context[],
   toneLevel: null as ToneLevel | null,
+  topic: null as Topic | null,
+  purpose: null as Purpose | null,
   originalText: '',
   userPrompt: '',
   senderInfo: '',
@@ -60,8 +68,9 @@ const initialState = {
   segments: null as SegmentData[] | null,
   maskedText: null as string | null,
   relationIntent: null as RelationIntentData | null,
-  processedText: null as string | null,
+  processedSegments: null as ProcessedSegmentsData | null,
   validationIssues: null as ValidationIssueData[] | null,
+  chosenTemplate: null as TemplateSelectedData | null,
   currentPhase: null as PipelinePhase | null,
   isTransforming: false,
   transformError: null as string | null,
@@ -78,6 +87,8 @@ export const useTransformStore = create<TransformState>((set) => ({
         : [...state.contexts, context],
     })),
   setToneLevel: (toneLevel) => set({ toneLevel }),
+  setTopic: (topic) => set({ topic }),
+  setPurpose: (purpose) => set({ purpose }),
   setOriginalText: (originalText) => set({ originalText }),
   setUserPrompt: (userPrompt) => set({ userPrompt }),
   setSenderInfo: (senderInfo) => set({ senderInfo }),
@@ -90,13 +101,14 @@ export const useTransformStore = create<TransformState>((set) => ({
   setSegments: (segments) => set({ segments }),
   setMaskedText: (maskedText) => set({ maskedText }),
   setRelationIntent: (relationIntent) => set({ relationIntent }),
-  setProcessedText: (processedText) => set({ processedText }),
+  setProcessedSegments: (processedSegments) => set({ processedSegments }),
   setValidationIssues: (validationIssues) => set({ validationIssues }),
+  setChosenTemplate: (chosenTemplate) => set({ chosenTemplate }),
   setCurrentPhase: (currentPhase) => set({ currentPhase }),
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
   setUsageInfo: (usageInfo) => set({ usageInfo }),
   resetForNewInput: () =>
-    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, relationIntent: null, processedText: null, validationIssues: null, currentPhase: null, transformError: null, usageInfo: null }),
+    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, relationIntent: null, processedSegments: null, validationIssues: null, chosenTemplate: null, currentPhase: null, transformError: null, usageInfo: null }),
   reset: () => set(initialState),
 }));

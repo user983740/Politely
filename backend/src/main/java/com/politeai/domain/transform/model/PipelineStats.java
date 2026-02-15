@@ -13,5 +13,7 @@ public record PipelineStats(
         int retryCount,
         boolean identityBoosterFired,
         boolean relationIntentFired,
+        boolean contextGatingFired,
+        String chosenTemplateId,
         long totalLatencyMs
 ) {}

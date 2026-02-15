@@ -6,6 +6,8 @@ import type {
   ValidationIssueData,
   PipelinePhase,
   LabelData,
+  ProcessedSegmentsData,
+  TemplateSelectedData,
 } from '@/features/transform/stream-api';
 
 interface Props {
@@ -16,8 +18,9 @@ interface Props {
   maskedText: string | null;
   labels: LabelData[] | null;
   relationIntent: RelationIntentData | null;
-  processedText: string | null;
+  processedSegments: ProcessedSegmentsData | null;
   validationIssues: ValidationIssueData[] | null;
+  chosenTemplate: TemplateSelectedData | null;
   transformedText: string;
   transformError: string | null;
 }
@@ -95,6 +98,20 @@ const STEPS: StepDef[] = [
     label: '3계층 구조 분석',
     activeLabel: '라벨링 중',
     runPhases: ['labeling'],
+    isLlm: true,
+  },
+  {
+    id: 'template_select',
+    label: '구조 템플릿 선택',
+    activeLabel: '템플릿 선택 중',
+    runPhases: ['template_selecting'],
+  },
+  {
+    id: 'context_gating',
+    label: '컨텍스트 게이팅',
+    activeLabel: '메타데이터 검증 중',
+    runPhases: ['context_gating'],
+    skipPhases: ['context_gating_skipped'],
     isLlm: true,
   },
   {
@@ -178,31 +195,6 @@ function HighlightLocked({ text }: { text: string }) {
   );
 }
 
-function HighlightProcessed({ text }: { text: string }) {
-  const parts = text.split(/(\[REDACTED:[^\]]+\]|\[SOFTEN:[A-Z_]+:\s[^\]]*\])/g);
-  return (
-    <span>
-      {parts.map((part, i) => {
-        if (/^\[REDACTED:/.test(part)) {
-          return (
-            <span key={i} className="px-1 py-0.5 mx-0.5 rounded bg-red-100 text-red-700 text-[11px] font-medium">
-              {part}
-            </span>
-          );
-        }
-        if (/^\[SOFTEN:/.test(part)) {
-          return (
-            <span key={i} className="px-1 py-0.5 mx-0.5 rounded bg-amber-100 text-amber-700 text-[11px] font-medium">
-              {part}
-            </span>
-          );
-        }
-        return <span key={i}>{part}</span>;
-      })}
-    </span>
-  );
-}
-
 function SpinnerIcon() {
   return (
     <svg className="animate-spin w-3.5 h-3.5 text-accent" viewBox="0 0 24 24" aria-hidden="true">
@@ -252,8 +244,9 @@ function StepContent({
   maskedText,
   labels,
   relationIntent,
-  processedText,
+  processedSegments,
   validationIssues,
+  chosenTemplate,
 }: {
   stepId: string;
   spans: LockedSpanInfo[] | null;
@@ -261,8 +254,9 @@ function StepContent({
   maskedText: string | null;
   labels: LabelData[] | null;
   relationIntent: RelationIntentData | null;
-  processedText: string | null;
+  processedSegments: ProcessedSegmentsData | null;
   validationIssues: ValidationIssueData[] | null;
+  chosenTemplate: TemplateSelectedData | null;
 }) {
   switch (stepId) {
     case 'extract':
@@ -333,6 +327,26 @@ function StepContent({
         );
       }
 
+    case 'template_select':
+      if (!chosenTemplate) return null;
+      return (
+        <div className="space-y-0.5 text-[11px]">
+          <div className="flex gap-1.5">
+            <span className="shrink-0 font-medium text-text-secondary">템플릿</span>
+            <span className="text-text">{chosenTemplate.templateName}</span>
+            <span className="text-text-secondary/50 font-mono">({chosenTemplate.templateId})</span>
+          </div>
+          {chosenTemplate.contextGatingFired && (
+            <div className="flex items-center gap-1 text-violet-500">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>게이팅 LLM이 템플릿을 조정함</span>
+            </div>
+          )}
+        </div>
+      );
+
     case 'relation':
       if (!relationIntent) return null;
       return (
@@ -353,10 +367,23 @@ function StepContent({
       );
 
     case 'redact':
-      if (!processedText) return null;
+      if (!processedSegments || processedSegments.length === 0) return null;
       return (
-        <div className="text-[11px] text-text leading-relaxed whitespace-pre-wrap bg-surface/40 rounded-lg p-2 max-h-20 overflow-hidden">
-          <HighlightProcessed text={processedText} />
+        <div className="space-y-1">
+          {processedSegments.map((seg) => (
+            <div key={seg.id} className="flex items-start gap-1.5 text-[11px]">
+              <span className={`shrink-0 px-1 py-0.5 rounded font-medium ${
+                seg.tier === 'GREEN' ? 'bg-emerald-50 text-emerald-600'
+                  : seg.tier === 'YELLOW' ? 'bg-amber-50 text-amber-600'
+                    : 'bg-red-50 text-red-600'
+              }`}>
+                {seg.label}
+              </span>
+              <span className="text-text leading-relaxed line-clamp-1">
+                {seg.text ?? '[삭제됨]'}
+              </span>
+            </div>
+          ))}
         </div>
       );
 
@@ -405,8 +432,9 @@ export default function PipelineTracePanel({
   maskedText,
   labels,
   relationIntent,
-  processedText,
+  processedSegments,
   validationIssues,
+  chosenTemplate,
   transformedText,
   transformError,
 }: Props) {
@@ -494,8 +522,9 @@ export default function PipelineTracePanel({
             (step.id === 'segment' && segments && segments.length > 0) ||
             (step.id === 'normalize' && maskedText) ||
             (step.id === 'label' && labels) ||
+            (step.id === 'template_select' && chosenTemplate) ||
             (step.id === 'relation' && relationIntent) ||
-            (step.id === 'redact' && processedText) ||
+            (step.id === 'redact' && processedSegments && processedSegments.length > 0) ||
             (step.id === 'validate' && validationIssues !== null)
           );
           const isLast = idx === STEPS.length - 1;
@@ -552,6 +581,9 @@ export default function PipelineTracePanel({
                       G{labels.filter(l => l.tier === 'GREEN').length} Y{labels.filter(l => l.tier === 'YELLOW').length} R{labels.filter(l => l.tier === 'RED').length}
                     </span>
                   )}
+                  {status === 'completed' && step.id === 'template_select' && chosenTemplate && (
+                    <span className="text-[10px] text-text-secondary">{chosenTemplate.templateId}</span>
+                  )}
                   {status === 'completed' && step.id === 'validate' && validationIssues && (
                     <span className={`text-[10px] ${validationIssues.length === 0 ? 'text-emerald-500' : 'text-amber-500'}`}>
                       {validationIssues.length === 0 ? 'PASS' : `${validationIssues.length} issues`}
@@ -586,8 +618,9 @@ export default function PipelineTracePanel({
                     maskedText={maskedText}
                     labels={labels}
                     relationIntent={relationIntent}
-                    processedText={processedText}
+                    processedSegments={processedSegments}
                     validationIssues={validationIssues}
+                    chosenTemplate={chosenTemplate}
                   />
                 </div>
               )}

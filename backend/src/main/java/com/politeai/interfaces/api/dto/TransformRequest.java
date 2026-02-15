@@ -1,8 +1,10 @@
 package com.politeai.interfaces.api.dto;
 
 import com.politeai.domain.transform.model.Persona;
+import com.politeai.domain.transform.model.Purpose;
 import com.politeai.domain.transform.model.SituationContext;
 import com.politeai.domain.transform.model.ToneLevel;
+import com.politeai.domain.transform.model.Topic;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -30,5 +32,9 @@ public record TransformRequest(
         @Size(max = 100, message = "Sender info must not exceed 100 characters")
         String senderInfo,
 
-        Boolean identityBoosterToggle
+        Boolean identityBoosterToggle,
+
+        Topic topic,
+
+        Purpose purpose
 ) {}

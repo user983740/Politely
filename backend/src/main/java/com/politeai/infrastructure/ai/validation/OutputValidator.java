@@ -2,19 +2,19 @@ package com.politeai.infrastructure.ai.validation;
 
 import com.politeai.domain.transform.model.*;
 import com.politeai.domain.transform.model.ValidationIssue.Severity;
+import com.politeai.infrastructure.ai.pipeline.template.StructureSection;
+import com.politeai.infrastructure.ai.pipeline.template.StructureTemplate;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Rule-based post-processing validator for LLM output.
- * Checks 7 rules and returns validation results.
+ * Checks 11 rules and returns validation results.
  */
 @Slf4j
 @Component
@@ -98,44 +98,85 @@ public class OutputValidator {
             "처리 드리겠습니다"
     );
 
+    // Rule 9: Core number pattern — 3+ digit numbers, with or without commas
+    private static final Pattern CORE_NUMBER_PATTERN = Pattern.compile(
+            "\\d{1,3}(?:,\\d{3})+|\\d{3,}"
+    );
+
+    // Rule 10: Date/time patterns
+    private static final List<Pattern> DATE_PATTERNS = List.of(
+            Pattern.compile("\\d{4}[./-]\\d{1,2}([./-]\\d{1,2})?"),  // 2026-03-01, 2026.3.1
+            Pattern.compile("\\d{1,2}월\\s*\\d{1,2}일"),              // 3월 1일
+            Pattern.compile("\\d{1,2}:\\d{2}")                        // 15:30
+    );
+
+    // Rule 11: Stopwords (excluded from meaning word extraction)
+    private static final Set<String> STOPWORDS = Set.of(
+            "은", "는", "이", "가", "을", "를", "에", "의", "와", "과",
+            "로", "도", "만", "까지", "부터", "에서", "처럼", "보다",
+            "그리고", "하지만", "또한", "그래서", "그런데", "따라서",
+            "문제", "확인", "요청", "부분", "경우", "상황", "내용",
+            "것", "수", "등", "및", "위해", "대해", "통해"
+    );
+
+    private static final Pattern KOREAN_WORD = Pattern.compile("[가-힣]{2,}");
+
     /**
-     * Validate the LLM output against all rules (backward compat — no redaction map).
+     * Validate the LLM output against all rules (backward compat — no redaction map, no yellow texts).
      */
-    public ValidationResult validate(String output,
+    public ValidationResult validate(String finalText,
                                      String originalText,
                                      List<LockedSpan> spans,
-                                     String maskedOutput,
+                                     String rawLlmOutput,
                                      Persona persona) {
-        return validate(output, originalText, spans, maskedOutput, persona, Collections.emptyMap());
+        return validate(finalText, originalText, spans, rawLlmOutput, persona, Collections.emptyMap(), List.of());
     }
 
     /**
-     * Validate the LLM output against all rules, including REDACTED_REENTRY check.
-     *
-     * @param output       the LLM output text (after unmask)
-     * @param originalText the original input text
-     * @param spans        the extracted locked spans
-     * @param maskedOutput the LLM output before unmask (for placeholder check)
-     * @param persona      the target persona
-     * @param redactionMap mapping of [REDACTED:...] markers to original text
-     * @return validation result with all issues
+     * Validate the LLM output against all rules (backward compat — no yellow texts).
      */
-    public ValidationResult validate(String output,
+    public ValidationResult validate(String finalText,
                                      String originalText,
                                      List<LockedSpan> spans,
-                                     String maskedOutput,
+                                     String rawLlmOutput,
                                      Persona persona,
                                      Map<String, String> redactionMap) {
+        return validate(finalText, originalText, spans, rawLlmOutput, persona, redactionMap, List.of());
+    }
+
+    /**
+     * Validate the LLM output against all 11 rules.
+     *
+     * @param finalText          the final user-facing output (after unmask)
+     * @param originalText       the original input text
+     * @param spans              the extracted locked spans
+     * @param rawLlmOutput       the Final LLM's raw output (before unmask, with placeholders)
+     * @param persona            the target persona
+     * @param redactionMap       mapping of [REDACTED:...] markers to original text
+     * @param yellowSegmentTexts YELLOW segment original texts for content drop check
+     * @return validation result with all issues
+     */
+    public ValidationResult validate(String finalText,
+                                     String originalText,
+                                     List<LockedSpan> spans,
+                                     String rawLlmOutput,
+                                     Persona persona,
+                                     Map<String, String> redactionMap,
+                                     List<String> yellowSegmentTexts) {
         List<ValidationIssue> issues = new ArrayList<>();
 
-        checkEmoji(output, issues);
-        checkForbiddenPhrases(output, issues);
-        checkHallucinatedFacts(output, originalText, spans, issues);
-        checkEndingRepetition(output, issues);
-        checkLengthOverexpansion(output, originalText, issues);
-        checkPerspectiveError(output, persona, issues);
-        checkLockedSpanMissing(maskedOutput, output, spans, issues);
-        checkRedactedReentry(output, maskedOutput, redactionMap, issues);
+        checkEmoji(finalText, issues);
+        checkForbiddenPhrases(finalText, issues);
+        checkHallucinatedFacts(finalText, originalText, spans, issues);
+        checkEndingRepetition(finalText, issues);
+        checkLengthOverexpansion(finalText, originalText, issues);
+        checkPerspectiveError(finalText, persona, issues);
+        checkLockedSpanMissing(rawLlmOutput, finalText, spans, issues);
+        checkRedactedReentry(finalText, rawLlmOutput, redactionMap, issues);
+        checkCoreNumberMissing(finalText, originalText, spans, issues);
+        checkCoreDateMissing(finalText, originalText, spans, issues);
+        checkSoftenContentDropped(finalText, yellowSegmentTexts, issues);
+        // S2 check is only called from the template-aware overload
 
         boolean passed = issues.stream().noneMatch(i -> i.severity() == Severity.ERROR);
 
@@ -147,6 +188,62 @@ public class OutputValidator {
         }
 
         return new ValidationResult(passed, issues);
+    }
+
+    /**
+     * Validate with template-aware S2 presence check.
+     */
+    public ValidationResult validate(String finalText,
+                                     String originalText,
+                                     List<LockedSpan> spans,
+                                     String rawLlmOutput,
+                                     Persona persona,
+                                     Map<String, String> redactionMap,
+                                     List<String> yellowSegmentTexts,
+                                     StructureTemplate template,
+                                     List<StructureSection> effectiveSections,
+                                     List<LabeledSegment> labeledSegments) {
+        // Run all standard validations
+        ValidationResult baseResult = validate(finalText, originalText, spans, rawLlmOutput, persona, redactionMap, yellowSegmentTexts);
+
+        // Additional: S2 presence check
+        List<ValidationIssue> allIssues = new ArrayList<>(baseResult.issues());
+        checkSectionS2Missing(finalText, effectiveSections, labeledSegments, allIssues);
+
+        boolean passed = allIssues.stream().noneMatch(i -> i.severity() == Severity.ERROR);
+        return new ValidationResult(passed, allIssues);
+    }
+
+    // Rule 12: Section S2 missing — template required S2 but output lacks check/effort statement
+    private static final Pattern S2_EFFORT_PATTERN = Pattern.compile(
+            "확인|점검|검토|살펴|조사|파악|내부.*결과|담당.*확인|로그.*기준"
+    );
+
+    private void checkSectionS2Missing(String finalText,
+                                        List<StructureSection> effectiveSections,
+                                        List<LabeledSegment> labeledSegments,
+                                        List<ValidationIssue> issues) {
+        if (effectiveSections == null || labeledSegments == null) return;
+
+        // Only check if template includes S2
+        boolean templateHasS2 = effectiveSections.contains(StructureSection.S2_OUR_EFFORT);
+        if (!templateHasS2) return;
+
+        // Only check if labels have ACCOUNTABILITY or NEGATIVE_FEEDBACK
+        boolean hasRelevantLabels = labeledSegments.stream()
+                .anyMatch(ls -> ls.label() == SegmentLabel.ACCOUNTABILITY
+                        || ls.label() == SegmentLabel.NEGATIVE_FEEDBACK);
+        if (!hasRelevantLabels) return;
+
+        // Check output for effort/check expressions
+        if (!S2_EFFORT_PATTERN.matcher(finalText).find()) {
+            issues.add(new ValidationIssue(
+                    ValidationIssueType.SECTION_S2_MISSING,
+                    Severity.WARNING,
+                    "S2(내부 확인/점검) 섹션 누락: 템플릿에 포함되어 있으나 출력에 확인/점검 표현 없음",
+                    null
+            ));
+        }
     }
 
     // Rule 1: Emoji detection
@@ -318,15 +415,15 @@ public class OutputValidator {
     }
 
     // Rule 7: LockedSpan missing in output
-    private void checkLockedSpanMissing(String maskedOutput, String unmaskedOutput,
+    private void checkLockedSpanMissing(String rawLlmOutput, String finalText,
                                         List<LockedSpan> spans, List<ValidationIssue> issues) {
-        if (spans == null || spans.isEmpty() || maskedOutput == null) {
+        if (spans == null || spans.isEmpty() || rawLlmOutput == null) {
             return;
         }
 
         for (LockedSpan span : spans) {
-            // Check if placeholder exists in the masked output (raw LLM output)
-            if (maskedOutput.contains(span.placeholder())) {
+            // Check if placeholder exists in the raw LLM output
+            if (rawLlmOutput.contains(span.placeholder())) {
                 continue;
             }
 
@@ -335,18 +432,18 @@ public class OutputValidator {
             Pattern flexible = Pattern.compile(
                     "\\{\\{\\s*" + prefix + "[-_]?" + span.index() + "\\s*\\}\\}"
             );
-            if (flexible.matcher(maskedOutput).find()) {
+            if (flexible.matcher(rawLlmOutput).find()) {
                 continue;
             }
 
             // Check if original text appears in raw LLM output
-            if (maskedOutput.contains(span.originalText())) {
+            if (rawLlmOutput.contains(span.originalText())) {
                 continue;
             }
 
-            // Final fallback: check if original text exists in unmasked output
+            // Final fallback: check if original text exists in final output
             // (covers cases where unmask succeeded via other means)
-            if (unmaskedOutput != null && unmaskedOutput.contains(span.originalText())) {
+            if (finalText != null && finalText.contains(span.originalText())) {
                 continue;
             }
 
@@ -359,51 +456,239 @@ public class OutputValidator {
         }
     }
 
-    // Rule 8: Redacted content reentry
-    private void checkRedactedReentry(String output, String maskedOutput,
+    // Censorship trace phrases — must not appear in final output
+    private static final List<String> CENSORSHIP_TRACES = List.of(
+            "[삭제됨]", "[REDACTED", "삭제된 내용", "제거된 부분", "삭제된 부분",
+            "일부 내용을 삭제", "부적절한 내용이 제거"
+    );
+
+    // Rule 8: Redacted content reentry (JSON format — no markers, only reentry + trace detection)
+    private void checkRedactedReentry(String finalText, String rawLlmOutput,
                                        Map<String, String> redactionMap,
                                        List<ValidationIssue> issues) {
-        if (redactionMap == null || redactionMap.isEmpty()) {
-            return;
-        }
-
-        // Check 1: [REDACTED:...] markers should not appear in output
-        if (maskedOutput != null) {
-            Pattern redactedMarker = Pattern.compile("\\[REDACTED:[^\\]]+\\]");
-            Matcher m = redactedMarker.matcher(maskedOutput);
-            while (m.find()) {
-                issues.add(new ValidationIssue(
-                        ValidationIssueType.REDACTED_REENTRY,
-                        Severity.ERROR,
-                        "REDACTED 마커 출력에 포함됨: " + m.group(),
-                        m.group()
-                ));
-            }
-
-            // Check 1b: [SOFTEN:LABEL: ...] markers should not appear in output
-            Pattern softenMarker = Pattern.compile("\\[SOFTEN:[A-Z_]+:\\s[^\\]]*\\]");
-            Matcher sm = softenMarker.matcher(maskedOutput);
-            while (sm.find()) {
-                issues.add(new ValidationIssue(
-                        ValidationIssueType.REDACTED_REENTRY,
-                        Severity.ERROR,
-                        "SOFTEN 마커 출력에 포함됨: " + sm.group(),
-                        sm.group()
-                ));
+        // Check 1: Original redacted text (>=6 chars) should not appear in output
+        // Normalized comparison: keep only Korean/English/digits
+        if (redactionMap != null && !redactionMap.isEmpty()) {
+            String normalizedOutput = normalizeForReentry(finalText);
+            for (Map.Entry<String, String> entry : redactionMap.entrySet()) {
+                String originalText = entry.getValue();
+                if (originalText.length() >= 6) {
+                    String normalizedOriginal = normalizeForReentry(originalText);
+                    if (normalizedOriginal.length() >= 4 && normalizedOutput.contains(normalizedOriginal)) {
+                        issues.add(new ValidationIssue(
+                                ValidationIssueType.REDACTED_REENTRY,
+                                Severity.ERROR,
+                                "제거된 내용 재유입: \"" + originalText.substring(0, Math.min(30, originalText.length())) + "...\"",
+                                entry.getKey()
+                        ));
+                    }
+                }
             }
         }
 
-        // Check 2: Original redacted text (>=10 chars) should not appear in output verbatim
-        for (Map.Entry<String, String> entry : redactionMap.entrySet()) {
-            String originalText = entry.getValue();
-            if (originalText.length() >= 10 && output.contains(originalText)) {
+        // Check 2: Censorship trace phrases in output
+        for (String trace : CENSORSHIP_TRACES) {
+            if (finalText.contains(trace)) {
                 issues.add(new ValidationIssue(
-                        ValidationIssueType.REDACTED_REENTRY,
+                        ValidationIssueType.REDACTION_TRACE,
                         Severity.ERROR,
-                        "제거된 내용 재유입: \"" + originalText.substring(0, Math.min(30, originalText.length())) + "...\"",
-                        entry.getKey()
+                        "검열 흔적 문구 감지: \"" + trace + "\"",
+                        trace
                 ));
             }
         }
+    }
+
+    /**
+     * Normalize text for reentry comparison: keep only Korean, English, and digits.
+     */
+    private String normalizeForReentry(String text) {
+        return text.replaceAll("[^가-힣a-zA-Z0-9]", "");
+    }
+
+    // Rule 9: Core number missing — numbers from originalText that should be preserved
+    private void checkCoreNumberMissing(String finalText, String originalText,
+                                         List<LockedSpan> spans, List<ValidationIssue> issues) {
+        Matcher matcher = CORE_NUMBER_PATTERN.matcher(originalText);
+
+        // Collect numbers from LockedSpan.originalText() (Rule 7 already covers these)
+        Set<String> lockedNumbers = collectLockedNumbers(spans, CORE_NUMBER_PATTERN);
+
+        while (matcher.find()) {
+            String number = matcher.group();  // "1,200" or "1200"
+            // Normalize: remove commas
+            String normalized = number.replaceAll(",", "");
+            if (lockedNumbers.contains(normalized)) continue;
+
+            // Check if output contains the number as-is or comma-stripped
+            if (finalText.contains(number) || finalText.contains(normalized)) continue;
+            // Also compare with comma-stripped output
+            if (finalText.replaceAll(",", "").contains(normalized)) continue;
+
+            // SAFE_NUMBER_CONTEXT: extended window (-8 ~ +8) for context check
+            int ctxStart = Math.max(0, matcher.start() - 8);
+            int ctxEnd = Math.min(originalText.length(), matcher.end() + 8);
+            if (SAFE_NUMBER_CONTEXT.matcher(originalText.substring(ctxStart, ctxEnd)).find()) continue;
+
+            issues.add(new ValidationIssue(
+                    ValidationIssueType.CORE_NUMBER_MISSING, Severity.WARNING,
+                    "원문 숫자 누락: \"" + number + "\"", number));
+        }
+    }
+
+    // Rule 10: Core date/time missing — dates/times from originalText that should be preserved
+    private void checkCoreDateMissing(String finalText, String originalText,
+                                       List<LockedSpan> spans, List<ValidationIssue> issues) {
+        Set<String> lockedTexts = collectLockedTexts(spans);
+
+        for (Pattern pattern : DATE_PATTERNS) {
+            Matcher matcher = pattern.matcher(originalText);
+            while (matcher.find()) {
+                String dateStr = matcher.group();
+                if (lockedTexts.stream().anyMatch(s -> s.contains(dateStr))) continue;
+
+                // 1st: exact match in output
+                if (finalText.contains(dateStr)) continue;
+
+                // 2nd: separator normalization (. / - unified)
+                String normalizedDate = dateStr.replaceAll("[./-]", "-");
+                String normalizedOutput = finalText.replaceAll("[./-]", "-");
+                if (normalizedOutput.contains(normalizedDate)) continue;
+
+                // 3rd: numeric sequence comparison (handles 0-padding: 03 vs 3)
+                List<Integer> dateNums = extractDateNumbers(dateStr);
+                Matcher outMatcher = pattern.matcher(finalText);
+                boolean numericMatch = false;
+                while (outMatcher.find()) {
+                    if (extractDateNumbers(outMatcher.group()).equals(dateNums)) {
+                        numericMatch = true;
+                        break;
+                    }
+                }
+                if (numericMatch) continue;
+
+                issues.add(new ValidationIssue(
+                        ValidationIssueType.CORE_DATE_MISSING, Severity.WARNING,
+                        "원문 날짜/시간 누락: \"" + dateStr + "\"", dateStr));
+            }
+        }
+    }
+
+    // Rule 11: SOFTEN content dropped — YELLOW segment content completely missing
+    private void checkSoftenContentDropped(String finalText, List<String> yellowSegmentTexts,
+                                            List<ValidationIssue> issues) {
+        if (yellowSegmentTexts == null || yellowSegmentTexts.isEmpty()) return;
+
+        for (String segText : yellowSegmentTexts) {
+            if (segText.length() < 15) continue;
+
+            // Extract meaning words (Korean 2+ chars, excluding stopwords)
+            List<String> meaningWords = extractMeaningWords(segText);
+            if (meaningWords.size() < 2) continue;
+
+            // Pass condition (OR — any one is enough):
+            // 1. At least one meaning word (or its stem without Korean particles) exists in output
+            boolean hasWordMatch = meaningWords.stream().anyMatch(word ->
+                    containsWithParticleVariation(finalText, word));
+            if (hasWordMatch) continue;
+
+            // 2. A core number (3+ digits) from the segment exists in output
+            boolean hasNumberMatch = Pattern.compile("\\d{3,}").matcher(segText).results()
+                    .anyMatch(m -> finalText.contains(m.group()));
+            if (hasNumberMatch) continue;
+
+            issues.add(new ValidationIssue(
+                    ValidationIssueType.SOFTEN_CONTENT_DROPPED, Severity.WARNING,
+                    "SOFTEN 대상 내용 완전 소실: \"" + segText.substring(0, Math.min(30, segText.length())) + "...\"",
+                    null));
+        }
+    }
+
+    // --- Retry hint builders ---
+
+    /**
+     * Build a specific retry hint for LOCKED_SPAN_MISSING errors.
+     * Lists each missing placeholder with its original text so the LLM knows exactly what to include.
+     *
+     * @param issues      validation issues from the current run
+     * @param lockedSpans the full list of locked spans
+     * @return a hint string to append to the retry prompt, or empty string if no LOCKED_SPAN_MISSING errors
+     */
+    public String buildLockedSpanRetryHint(List<ValidationIssue> issues, List<LockedSpan> lockedSpans) {
+        List<ValidationIssue> missingSpanIssues = issues.stream()
+                .filter(i -> i.type() == ValidationIssueType.LOCKED_SPAN_MISSING
+                        && i.severity() == Severity.ERROR)
+                .toList();
+
+        if (missingSpanIssues.isEmpty() || lockedSpans == null || lockedSpans.isEmpty()) {
+            return "";
+        }
+
+        // Collect the missing placeholders from matchedText (which stores the placeholder string)
+        Set<String> missingPlaceholders = missingSpanIssues.stream()
+                .map(ValidationIssue::matchedText)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        // Build detailed hint with placeholder → original text mapping
+        StringBuilder hint = new StringBuilder();
+        hint.append("\n\n[고정 표현 누락 오류] 다음 고정 표현이 출력에 반드시 포함되어야 합니다:\n");
+
+        for (LockedSpan span : lockedSpans) {
+            if (missingPlaceholders.contains(span.placeholder())) {
+                hint.append("- ").append(span.placeholder())
+                        .append(" → \"").append(span.originalText()).append("\"\n");
+            }
+        }
+        hint.append("위 플레이스홀더를 변환 결과에 반드시 자연스럽게 포함하세요. 절대 누락하지 마세요.");
+
+        return hint.toString();
+    }
+
+    // --- Helper methods ---
+
+    private Set<String> collectLockedNumbers(List<LockedSpan> spans, Pattern numberPattern) {
+        Set<String> result = new HashSet<>();
+        if (spans == null) return result;
+        for (LockedSpan span : spans) {
+            Matcher m = numberPattern.matcher(span.originalText());
+            while (m.find()) result.add(m.group().replaceAll(",", ""));
+        }
+        return result;
+    }
+
+    private Set<String> collectLockedTexts(List<LockedSpan> spans) {
+        if (spans == null) return Set.of();
+        return spans.stream().map(LockedSpan::originalText).collect(Collectors.toSet());
+    }
+
+    private List<Integer> extractDateNumbers(String dateStr) {
+        return Pattern.compile("\\d+").matcher(dateStr).results()
+                .map(m -> Integer.parseInt(m.group()))
+                .toList();
+    }
+
+    /**
+     * Check if the text contains the word, accounting for Korean particle variations.
+     * Korean particles (조사: 에서, 을, 를, etc.) attach directly to nouns,
+     * so "디자인팀에서" should match "디자인팀" in the output.
+     * Tries progressively shorter prefixes (removing up to 2 trailing chars).
+     */
+    private boolean containsWithParticleVariation(String text, String word) {
+        if (text.contains(word)) return true;
+        for (int len = word.length() - 1; len >= Math.max(2, word.length() - 2); len--) {
+            if (text.contains(word.substring(0, len))) return true;
+        }
+        return false;
+    }
+
+    private List<String> extractMeaningWords(String text) {
+        List<String> words = new ArrayList<>();
+        Matcher m = KOREAN_WORD.matcher(text);
+        while (m.find()) {
+            String word = m.group();
+            if (!STOPWORDS.contains(word)) words.add(word);
+        }
+        return words;
     }
 }

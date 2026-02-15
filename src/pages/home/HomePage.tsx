@@ -2,8 +2,8 @@ import {useEffect, useRef, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {useAuthStore, useTransformStore} from '@/shared/store';
 import {useNavigate} from 'react-router-dom';
-import {PERSONAS, CONTEXTS, MAX_PROMPT_LENGTH, MAX_SENDER_INFO_LENGTH} from '@/shared/config/constants';
-import type {Persona, Context, ToneLevel} from '@/shared/config/constants';
+import {PERSONAS, CONTEXTS, TOPICS, PURPOSES, MAX_PROMPT_LENGTH, MAX_SENDER_INFO_LENGTH} from '@/shared/config/constants';
+import type {Persona, Context, ToneLevel, Topic, Purpose} from '@/shared/config/constants';
 import {ResultPanel} from '@/widgets/result-panel';
 import {AnalysisPanel} from '@/widgets/analysis-panel';
 import {CostPanel} from '@/widgets/cost-panel';
@@ -77,6 +77,8 @@ export default function HomePage() {
     persona,
     contexts,
     toneLevel,
+    topic,
+    purpose,
     originalText,
     userPrompt,
     senderInfo,
@@ -86,14 +88,17 @@ export default function HomePage() {
     segments,
     maskedText,
     relationIntent,
-    processedText,
+    processedSegments,
     validationIssues,
+    chosenTemplate,
     isTransforming,
     transformError,
     usageInfo,
     setPersona,
     toggleContext,
     setToneLevel,
+    setTopic,
+    setPurpose,
     setOriginalText,
     setUserPrompt,
     setSenderInfo,
@@ -104,8 +109,9 @@ export default function HomePage() {
     setSegments,
     setMaskedText,
     setRelationIntent,
-    setProcessedText,
+    setProcessedSegments,
     setValidationIssues,
+    setChosenTemplate,
     currentPhase,
     setCurrentPhase,
     setIsTransforming,
@@ -116,6 +122,7 @@ export default function HomePage() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [identityBoosterToggle, setIdentityBoosterToggle] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const rawStreamRef = useRef('');
   const spansRef = useRef<LockedSpanInfo[]>([]);
@@ -151,8 +158,9 @@ export default function HomePage() {
     setSegments(null);
     setMaskedText(null);
     setRelationIntent(null);
-    setProcessedText(null);
+    setProcessedSegments(null);
     setValidationIssues(null);
+    setChosenTemplate(null);
     setCurrentPhase(null);
     setUsageInfo(null);
     rawStreamRef.current = '';
@@ -168,6 +176,8 @@ export default function HomePage() {
           ...(userPrompt.trim() ? {userPrompt: userPrompt.trim()} : {}),
           ...(senderInfo.trim() ? {senderInfo: senderInfo.trim()} : {}),
           identityBoosterToggle,
+          ...(topic ? {topic} : {}),
+          ...(purpose ? {purpose} : {}),
         },
         {
           onSpans: (spans) => {
@@ -175,6 +185,7 @@ export default function HomePage() {
           },
           onLabels: (data) => setLabels(data),
           onStats: (data) => setPipelineStats(data),
+          onTemplateSelected: (data) => setChosenTemplate(data),
           onDelta: (chunk) => {
             rawStreamRef.current += chunk;
             if (spansRef.current.length > 0) {
@@ -190,7 +201,7 @@ export default function HomePage() {
           onSegments: (data) => setSegments(data),
           onMaskedText: (text) => setMaskedText(text),
           onRelationIntent: (data) => setRelationIntent(data),
-          onProcessedText: (text) => setProcessedText(text),
+          onProcessedSegments: (data) => setProcessedSegments(data),
           onValidationIssues: (issues) => setValidationIssues(issues),
           onPhase: (phase) => setCurrentPhase(phase),
           onUsage: (usage) => setUsageInfo(usage),
@@ -358,6 +369,79 @@ export default function HomePage() {
           </button>
         </div>
       </section>
+
+      {/* Advanced Settings (TOPIC/PURPOSE) */}
+      <section className="mt-8 lg:mt-10">
+        <button
+          onClick={() => setAdvancedOpen(!advancedOpen)}
+          className="flex items-center gap-2 text-sm font-semibold text-text-secondary cursor-pointer group"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+            aria-hidden="true"
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+          고급 설정
+          {(topic || purpose) && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent font-medium">
+              {[topic && TOPICS.find(t => t.key === topic)?.label, purpose && PURPOSES.find(p => p.key === purpose)?.label].filter(Boolean).join(', ')}
+            </span>
+          )}
+        </button>
+
+        {advancedOpen && (
+          <div className="mt-4 space-y-6">
+            {/* Topic */}
+            <div>
+              <h4 className="text-xs font-medium text-text-secondary mb-2.5">주제 (TOPIC)</h4>
+              <div className="flex flex-wrap gap-2">
+                {TOPICS.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => setTopic(topic === t.key ? null : (t.key as Topic))}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+                      topic === t.key
+                        ? 'bg-accent text-white border-accent shadow-sm shadow-accent/20'
+                        : 'border-border/60 text-text-secondary bg-white hover:border-accent/30 hover:text-accent'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Purpose */}
+            <div>
+              <h4 className="text-xs font-medium text-text-secondary mb-2.5">목적 (PURPOSE)</h4>
+              <div className="flex flex-wrap gap-2">
+                {PURPOSES.map((p) => (
+                  <button
+                    key={p.key}
+                    onClick={() => setPurpose(purpose === p.key ? null : (p.key as Purpose))}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all cursor-pointer ${
+                      purpose === p.key
+                        ? 'bg-accent text-white border-accent shadow-sm shadow-accent/20'
+                        : 'border-border/60 text-text-secondary bg-white hover:border-accent/30 hover:text-accent'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
     </>
   );
 
@@ -409,8 +493,9 @@ export default function HomePage() {
               maskedText={maskedText}
               labels={labels}
               relationIntent={relationIntent}
-              processedText={processedText}
+              processedSegments={processedSegments}
               validationIssues={validationIssues}
+              chosenTemplate={chosenTemplate}
               transformedText={transformedText}
               transformError={transformError}
             />

@@ -10,14 +10,18 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * LLM-based structure labeling service (LLM call #1 in the new pipeline).
+ * LLM-based structure labeling service (LLM call #1 in the pipeline).
  *
  * Sends segments + metadata to gpt-4o-mini and receives 3-tier labels
  * (GREEN/YELLOW/RED) for each segment.
+ *
+ * 14-label system: GREEN 5 + YELLOW 5 + RED 4
+ * YELLOW uses hard/soft trigger judgment instead of "polite conversion test".
  */
 @Slf4j
 @Component
@@ -31,6 +35,19 @@ public class StructureLabelService {
     private static final double TEMPERATURE = 0.2;
     private static final int MAX_TOKENS = 800;
     private static final double MIN_COVERAGE = 0.6;
+
+    /**
+     * Migration map for transitional period: old 8 YELLOW labels → new 5 YELLOW labels.
+     * If LLM outputs old label names, map them to new ones with a warning.
+     */
+    private static final Map<String, SegmentLabel> MIGRATION_MAP = Map.of(
+            "ACCOUNTABILITY_FACT", SegmentLabel.ACCOUNTABILITY,
+            "ACCOUNTABILITY_JUDGMENT", SegmentLabel.ACCOUNTABILITY,
+            "SELF_CONTEXT", SegmentLabel.SELF_JUSTIFICATION,
+            "SELF_DEFENSIVE", SegmentLabel.SELF_JUSTIFICATION,
+            "SPECULATION", SegmentLabel.EXCESS_DETAIL,
+            "OVER_EXPLANATION", SegmentLabel.EXCESS_DETAIL
+    );
 
     public record StructureLabelResult(
             List<LabeledSegment> labeledSegments,
@@ -46,80 +63,155 @@ public class StructureLabelService {
             출력 형식: 줄당 <SEG_ID>|<LABEL>
             세그먼트 텍스트는 서버가 이미 보유하고 있으므로 출력하지 마세요.
 
-            ## 라벨링의 목적 — 2축 분석
+            ## 라벨링의 목적 — 3축 분석
 
-            각 세그먼트를 **내용 기능**(무엇을 전달하는가)과 **태도 문제**(전달 방식에 문제가 있는가)의 2축으로 분석합니다.
+            각 세그먼트를 **내용 기능**(무엇을 전달하는가), **내용 적절성**(그 내용을 수신자에게 전달해도 괜찮은가), **관계 방향성**(이 내용이 관계를 개선/유지/악화하는가)의 3축으로 분석합니다.
             라벨 = 재작성 전략입니다. 라벨이 결정되면 서버/최종 모델이 라벨별 차등 재작성을 수행합니다.
 
-            - **GREEN**: 메시지에 꼭 필요한 내용. 원문 그대로 전달해도 되는 내용 — 문체만 다듬기
-            - **YELLOW**: 필요한 내용이지만 원문 그대로 전달하면 안 됨 — 라벨별 차등 재작성 전략 적용
+            - **GREEN**: 메시지에 꼭 필요한 내용. 경어/문체만 다듬기
+            - **YELLOW**: 필요한 내용이지만, 내용 자체를 재구성하지 않으면 수신자가 불편할 내용 — 라벨별 차등 재작성 전략 적용
             - **RED**: 내용 자체가 불필요하고 해로움 — 완전 삭제
 
-            ## 15개 라벨 체계
+            ## 14개 라벨 체계
 
-            ### GREEN (보존) — "이걸 빼면 받는 사람이 용건을 모른다"
-            - CORE_FACT: 핵심 사실 (기한, 수치, 상태, 결과, 구체적 행동 계획). 어조가 거칠어도 내용 자체가 필요하면 GREEN
+            ### GREEN (보존) — 5개
+            - CORE_FACT: 핵심 사실 (기한, 수치, 상태, 결과, 구체적 행동 계획)
             - CORE_INTENT: 핵심 요청/목적 (부탁, 제안, 대안, 질문)
-            - REQUEST: 명시적 요청/부탁 ("~해 주세요", "~하면 좋겠습니다")
-            - APOLOGY: 사과/양해 구하기 ("죄송합니다", "양해 부탁드립니다")
+            - REQUEST: 명시적 요청/부탁 — 단, 요청 자체가 수신자에게 부적절하면 YELLOW
+            - APOLOGY: 사과/양해 구하기
             - COURTESY: 관례적 예의 (인사, 감사, 호칭)
-            주의: 표현이 무례해도 내용이 필요하면 GREEN. 표현 교정은 최종 변환 모델의 몫
+            핵심: GREEN은 "경어/문체만 다듬기"만 수행함. 내용의 프레이밍이 바뀌어야 하면 반드시 YELLOW
 
-            ### YELLOW (수정) — "필요한 내용이지만 원문 그대로 전달하면 안 됨"
-            각 YELLOW 라벨은 서로 다른 재작성 전략을 유발합니다:
-            - ACCOUNTABILITY: 책임 소재 지적 — "네가 잘못했다"류. 사실 정보(누가, 무엇을, 왜)는 보존하되 주어 완화/수동형/사실 중심 중립 표현으로 재작성
-            - SELF_EXPLAIN: 상황 설명/해명 — "제가 ~라서"류. 핵심 사유만 간결하게, 변명 어조 제거
-            - NEGATIVE_FEEDBACK: 부정적 평가/피드백 — "퀄리티가 떨어진다"류. 문제→개선 방향 프레임 전환
-            - EMOTIONAL: 감정 토로 — "너무 화가 난다", "멘탈이 나간다"류. 감정어 제거, 영향/결과 중심 서술
-            - SPECULATION: 추측/가정 — "아마 ~일 것 같다"류. 단정 제거, 조건부/가능성 표현
-            - OVER_EXPLANATION: 장황한 설명/불필요한 맥락 — 핵심 사유만 남기고 축약
+            ### GREEN 함정 — 표면 형태에 속지 말 것
+            - 요청 형태이지만 상대 행동을 판단/지시 → NEGATIVE_FEEDBACK
+            - 사실 형태이지만 실제 기능이 자기변호/책임전가 → SELF_JUSTIFICATION 또는 ACCOUNTABILITY
+            - 인사/사과 형태이지만 빈정·비꼼 → EMOTIONAL 또는 AGGRESSION
+            - 사과 형태이지만 실제로는 변명/책임회피 → SELF_JUSTIFICATION
+            판단 기준: 세그먼트의 **표면 형태**가 아니라 **실제 기능**에 따라 분류
 
-            ### RED (삭제) — "내용 자체가 불필요하고 해로움"
-            - AGGRESSION: 공격/비꼬기/도발 — "제대로 하는 게 있나", "그것도 모르나"
-            - PERSONAL_ATTACK: 인신공격 — 상대 인격/능력 비하. "네가 무능해서", "내 탓하려고 시동건다"
-            - PRIVATE_TMI: 받는 사람이 전혀 알 필요 없고 빠져도 맥락이 유지되는 사적 정보
-            - PURE_GRUMBLE: 순수 넋두리/체념/한탄 — 용건과 완전히 무관한 불만
+            ### YELLOW (수정) — 5개 (강도 스펙트럼)
+            각 YELLOW 라벨은 서로 다른 재작성 전략을 유발하며, 강도 스펙트럼을 가집니다:
 
-            ## ACCOUNTABILITY vs PERSONAL_ATTACK 분리 기준 (핵심)
+            **ACCOUNTABILITY** (책임소재):
+            스펙트럼:
+            · 약(사실 보고): "서버 설정 변경 후 오류 발생" → 인과 보존, 보고체 정리만
+            · 강(비난 지적): "귀사가 맨날 이래서 문제" → 비난/판단 완전 제거, 사실만 남기기
+            기준: 상대 탓 뉘앙스가 강하면 비난 완전 제거. 약하면 보고체 정리만.
+            ⚠️ 비난이 사실보다 압도적이면 PERSONAL_ATTACK(RED) 검토
 
-            같은 "남 탓"이라도:
-            - "고객님 서버 설정이 잘못되어 오류가 발생했습니다" → **ACCOUNTABILITY**: 사실 정보(원인) 포함. 삭제하면 상대가 원인을 모름
-            - "고객님이 매번 이러니까 문제가 생기는 거예요" → **PERSONAL_ATTACK**: 사실 정보 없이 인격/행동 패턴 비난만
+            **SELF_JUSTIFICATION** (자기변호):
+            스펙트럼:
+            · 약(업무 맥락): "디자인팀 자료가 3일 늦어서" → 일정/원인/의존성 업무 맥락 보존, 문체만 정리
+            · 강(방어적 변명): "제 잘못도 있지만 사실은..." → 방어 프레임 삭제, 원인 사실만 추출
+            기준: 업무 맥락 정보는 남기되, 자기 방어 문장 구조만 제거.
+            ⚠️ 사실 없이 순수 자기방어만이면 PURE_GRUMBLE(RED) 검토
 
-            핵심 테스트: "이 문장에서 책임 지적을 빼고 사실 정보만 남기면 뭐가 남는가?"
-            - 남는 게 있으면 → ACCOUNTABILITY (YELLOW, 사실 보존 재작성)
-            - 남는 게 없으면 → PERSONAL_ATTACK (RED, 삭제)
+            **NEGATIVE_FEEDBACK** (부정적 평가):
+            상대의 행동/결과/능력에 대한 부정적 평가나 피드백.
+            "퀄리티가 떨어진다", "좀 신경 써주시면" 등.
+            → 긍정 인정 선행 + 개선 프레임 전환. 심각도 보존.
 
-            ## SELF_EXPLAIN vs RED 판단
+            **EMOTIONAL** (감정표현):
+            업무/이슈에 대한 감정적 반응. "너무 화가 난다", "답답하다" 등 — 메시지 맥락을 형성하는 감정.
+            → 삭제 금지. 직접→간접 전환. 협조 의지 마무리.
+            ⚠️ EMOTIONAL vs PRIVATE_TMI: 이슈/업무에 대한 감정 → EMOTIONAL. 발신자 개인 상태(직무 피로, 멘탈, 건강) → PRIVATE_TMI(RED)
 
-            같은 "자기 변호"라도:
-            - "디자인팀 자료가 3일 늦게 와서 일정이 밀렸습니다" → **SELF_EXPLAIN**: 원인 정보 포함, 간결히 재작성 가능
-            - "제 잘못이 아니에요 다들 그런 상황이면 똑같았을 거예요" → **PURE_GRUMBLE**: 사실 정보 없는 순수 자기방어/넋두리
+            **EXCESS_DETAIL** (과잉설명):
+            · 중복/반복: 핵심만 남기고 제거
+            · 추측/가정: ⚠️ 별도 우선 처리. 반드시 가능성 표현 전환 + persona별 확인 표현 추가. 단순 중복 제거로 처리 금지.
+            · 논리 체인: A→B→C 구조는 압축 보존
 
-            ## RED vs YELLOW 핵심 판단 기준
+            ### RED (삭제) — 4개
+            - AGGRESSION: 공격/비꼬기/도발
+            - PERSONAL_ATTACK: 인신공격 — 상대 인격/능력 비하
+            - PRIVATE_TMI: 받는 사람이 전혀 알 필요 없는 사적 정보. **즉시 RED 패턴**: 개인 건강/신체 상태("허리 아프고", "몸이 안 좋아서"), 가정사/집안일("이사 준비", "집안일이 있어서", "애가 아파서"), 사적 생활 일정("새벽 3시까지 했고", "밤새 작업"), 직무 스트레스/감정적 한계 토로("멘탈이 나간다", "스트레스 받는다", "지쳐간다", "번아웃"). 삭제해도 메시지 용건 이해에 전혀 지장 없는 사적 정보 → RED
+            - PURE_GRUMBLE: 순수 넋두리/체념/한탄 — 용건과 완전히 무관. **즉시 RED 패턴**: 체념/포기("진짜 모르겠습니다", "이러다 다 망한다"), 피해의식/억울함("저만 탓받는 느낌", "항상 제가 당하는 느낌"), 사실 없는 감정 토로("너무 힘들다", "이게 말이 되냐")
 
-            **RED는 극도로 보수적으로 적용하세요.** 조금이라도 의심되면 YELLOW입니다.
+            ### RED 분류 핵심 자문
+            RED 판단 전 스스로 물어보세요:
+            1. "이 세그먼트를 완전히 삭제해도 메시지의 핵심 용건이 전달되는가?" → YES이면 RED 후보
+            2. "이 내용이 수신자에게 유용한 정보(원인/해결/일정/사실)를 포함하는가?" → NO이면 RED 확정
+            3. "개인 건강/가정사/직무 피로/멘탈 토로인가?" → YES이면 PRIVATE_TMI(RED)
+            4. "사실 없이 불만/체념/한탄만인가?" → YES이면 PURE_GRUMBLE(RED)
+            ⚠️ EXCESS_DETAIL과 PRIVATE_TMI를 혼동하지 마세요: 업무 관련 과잉 설명은 EXCESS_DETAIL(YELLOW), 개인 사적 정보/건강/가정사는 PRIVATE_TMI(RED)
 
-            세그먼트 안에 다음 중 하나라도 포함되면 RED가 아닌 GREEN 또는 YELLOW:
-            - **원인/이유 설명**: 왜 문제가 생겼는지, 왜 지연되었는지 등 원인 정보
-            - **기술적/구체적 정보**: 파일명, 설정, 절차, 조치 내역 등 상대가 참고할 수 있는 구체적 정보
-            - **행동 지침**: 상대가 앞으로 뭘 해야 하는지 또는 뭘 하면 안 되는지
-            - **맥락 연결 고리**: 이걸 빼면 앞뒤 세그먼트의 연결이 끊기거나 "왜?"라는 질문이 생기는 내용
+            ### RED 강화 규칙
+            - **Rule 1 (공격 패턴):** 욕설/축약(ㅅㅂ,ㅄ,시x), 비꼬기("잘하시네요"+ㅋㅋ), 능력 부정형, "매번/맨날" 행동 비난 → RED
+            - **Rule 2 (조롱 자동):** 반어적 칭찬 → 사실 포함 불문 RED
+            - **Rule 3 (무정보 공격):** 사실 전혀 없이 비난/불만만 → RED
 
-            불필요한 내용 + 필요한 정보가 섞인 세그먼트 → **YELLOW** (RED 불가)
+            ## 분리 기준
 
-            ## 판단 프로세스
+            **ACCOUNTABILITY vs PERSONAL_ATTACK**: "비난 빼면 사실이 남는가?"
+            - "서버 설정 변경 후 오류가 발생한 것으로 확인됩니다" → ACCOUNTABILITY (약): 사실 보고
+            - "귀사 서버 설정이 이상해서 생긴거고 제가 지난번에도 말했는데" → ACCOUNTABILITY (강): 사실+비난
+            - "고객님이 매번 이러니까 문제가 생기는 거예요" → PERSONAL_ATTACK (RED): 사실 없이 비난
 
-            각 세그먼트마다:
-            1. 이 세그먼트의 **내용**이 메시지에 필요한가?
-               - YES → 2단계로
-               - NO → 3단계로
-            2. 원문 그대로 전달해도 되는 내용인가?
-               - YES → **GREEN** (CORE_FACT/CORE_INTENT/REQUEST/APOLOGY/COURTESY 중 해당)
-               - NO → **YELLOW** (ACCOUNTABILITY/SELF_EXPLAIN/NEGATIVE_FEEDBACK/EMOTIONAL/SPECULATION/OVER_EXPLANATION 중 해당)
-            3. 이 세그먼트를 통째로 빼면 논리적 빈 구멍이 생기는가?
-               - YES → **YELLOW**
-               - NO → **RED** (AGGRESSION/PERSONAL_ATTACK/PRIVATE_TMI/PURE_GRUMBLE 중 해당)
+            **SELF_JUSTIFICATION vs PURE_GRUMBLE**: "방어 빼면 원인 사실이 남는가?"
+            - "디자인팀 자료가 3일 늦게 와서 일정이 밀렸습니다" → SELF_JUSTIFICATION (약): 업무 맥락
+            - "제 잘못도 있지만 사실은 디자인팀에서 너무 늦게 줘서요" → SELF_JUSTIFICATION (강): 방어+사실
+            - "제 잘못이 아니에요 다들 그런 상황이면 똑같았을 거예요" → PURE_GRUMBLE (RED): 사실 없는 넋두리
+
+            ## 판단 프로세스 — 4단계 + 하드/소프트 트리거
+
+            ### 1단계: 내용 필요성
+            이 세그먼트를 통째로 삭제하면 메시지가 이해되는가?
+            - 이해 안 됨 → 2단계로
+            - 이해 됨 → ⚠️ 예외: 인사/감사/사과(COURTESY/APOLOGY 후보)는 품질에 필요 → 2단계로
+            - 이해 됨 + 예의 아님 → 3단계로 (RED 후보)
+
+            ### 2단계: GREEN vs YELLOW — 하드/소프트 트리거
+
+            ◆ 하드 트리거 (1개라도 → 즉시 YELLOW):
+            - 상대 행동/능력을 직접 판단·평가 ("항상 이러시잖아요", "좀 신경 써주시면")
+            - 비난 어조 + 일반화/반복 패턴 ("맨날/항상/매번 이런다", "왜 이래요", "당신이 안 해서")
+              ※ 증거/로그/시간을 동반한 정상적 RCA 보고("귀사 설정 변경 후 오류로 확인됩니다")는 하드 아님
+            - 감정 직접 폭발 ("답답하다", "화가 난다", "짜증난다") ※ 개인 상태 토로("멘탈 나간다","지쳐간다")는 PRIVATE_TMI(RED)
+            - 방어적 변명 구조 ("제 잘못도 있지만", "그건 제가 아니라")
+
+            ◆ 소프트 트리거 (2개 이상 → YELLOW):
+            - 원인의 외부 귀책 + 상대 과실/책임 지목이 결합 ("~때문에" 단독은 미해당)
+            - 원인의 외부 귀책 + 불평/감정이 결합
+            - 감정 간접 표출 ("좀 그렇다", "아쉽다")
+            - 근거 약한 추측 ("아마", "~것 같다", "분명")
+            - 동일 내용의 다른 표현으로 반복
+            - [수신자별 — persona+context 조합 고려]
+              BOSS: 상사 결정 불만/업무 과중 호소
+              CLIENT: 고객 과실 언급/이용 방식 비판 (단, 장애/오류에서 보고체 RCA는 소프트 완화)
+              PARENT: 양육 지시/가정환경 언급
+              PROFESSOR: 수업 방식 의견
+              OFFICIAL: 절차 불만/담당자 비판
+              OTHER: 상대 영역 침범
+
+            하드 0개 + 소프트 0~1개 → GREEN
+            하드 1개+ → YELLOW
+            소프트 2개+ → YELLOW
+
+            ### 3단계: RED vs YELLOW 판정
+            1단계에서 "삭제해도 이해됨 + 예의 아님"으로 온 세그먼트:
+
+            RED 패턴 (하나라도 해당 → RED):
+            - 욕설/비속어/축약 (초성 욕설 ㅅㅂ, ㅄ 등 포함)
+            - 비꼬는 칭찬 + 조롱 표식(ㅋㅋ, ^^, ㅎㅎ)
+            - 상대 인격/능력 직접 비하 ("무능하다", "뇌가 있냐", "그것도 못 해?")
+            - 수신자와 무관한 순수 사적 불만/한탄
+            - 구체적 사실 정보 없이 비난만으로 구성
+
+            RED 패턴 미해당 시:
+            - 구체적 정보가치(원인/수치/행동 지침 등) 있음 → YELLOW
+            - 정보가치 없음(넋두리/TMI/불필요한 반복) → RED
+
+            ### 4단계: 라벨 선택
+            GREEN/YELLOW/RED 각 라벨 중 가장 적합한 것 선택
+
+            ## YELLOW 인식 확대 — All-GREEN 오분류 방지
+
+            다음은 자주 GREEN으로 오분류되는 패턴입니다. 주의하세요:
+            - "~때문에" 구조: 단순 원인 설명이면 GREEN, 외부 귀책+불만 결합이면 YELLOW(ACCOUNTABILITY)
+            - 요청 형태의 지시: "좀 해주세요"류 — 실제로 상대 행동을 판단/지시하면 YELLOW(NEGATIVE_FEEDBACK)
+            - 장황한 설명: 핵심 사실 1개 + 동일 내용 반복 2~3개면 반복 부분은 YELLOW(EXCESS_DETAIL)
+            - 감정 간접 표출: "좀 그런 것 같다" — 간접이라도 감정이면 YELLOW(EMOTIONAL)
+            - 방어적 원인 설명: 원인이 객관적이어도 "~이라서 어쩔 수 없었다" 구조면 YELLOW(SELF_JUSTIFICATION)
 
             ## 예시 1
 
@@ -135,17 +227,16 @@ public class StructureLabelService {
 
             [정답]
             T1|CORE_FACT
-            T2|ACCOUNTABILITY
-            T3|OVER_EXPLANATION
+            T2|SELF_JUSTIFICATION
+            T3|PRIVATE_TMI
             T4|CORE_INTENT
             T5|PURE_GRUMBLE
             T6|APOLOGY
 
             [판단 근거]
-            T2: "디자인팀 자료가 늦었다"는 지연 원인 정보 포함 → 사실 보존, 주어 완화 재작성 → ACCOUNTABILITY (YELLOW)
-            T3: 사적 사유(이사)가 맥락 설명 역할을 하지만 장황 → 핵심만 남기고 축약 → OVER_EXPLANATION (YELLOW)
-            T5: 순수 불만. 용건(보고서 제출)과 무관한 넋두리 → PURE_GRUMBLE (RED)
-            T6: 사과 → APOLOGY (GREEN)
+            T2: 하드 트리거 — "제 잘못도 있지만"은 방어적 변명 구조 → SELF_JUSTIFICATION (강: 방어 프레임 삭제, 원인 사실만 추출)
+            T3: RED 자문 — (1)삭제해도 이해됨 YES (2)유용한 업무 사실 NO (3)가정사/사적 정보 YES → PRIVATE_TMI (RED). 이사 준비는 업무와 무관한 개인 사정
+            T5: 삭제해도 이해됨 + 예의 아님 → 3단계. 구체적 사실 없이 불만만 → PURE_GRUMBLE (RED)
 
             ## 예시 2
 
@@ -163,12 +254,12 @@ public class StructureLabelService {
             T2|ACCOUNTABILITY
             T3|NEGATIVE_FEEDBACK
             T4|CORE_INTENT
-            T5|PURE_GRUMBLE
+            T5|PRIVATE_TMI
 
             [판단 근거]
-            T2: 비난 어조이지만 오류 원인("서버 설정")과 행동 지침("config.yaml 건드리지 말 것")이라는 핵심 사실 정보 포함 → 사실 보존, 주어 완화 재작성 → ACCOUNTABILITY (YELLOW)
-            T3: "또 수정하셔서 이 사단이 난거"는 부정적 평가이지만, T2의 경고와 현재 상황을 잇는 내용 → 문제→개선 프레임 전환 → NEGATIVE_FEEDBACK (YELLOW)
-            T5: 순수 넋두리. 용건 무관, 사실 정보 없음 → PURE_GRUMBLE (RED)
+            T2: 하드 트리거 — "이상해서", "말했는데" 비난 어조. 사실(서버 설정, config.yaml) 포함이지만 비난 두드러짐 → ACCOUNTABILITY (강: 비난 제거, 사실만 보존)
+            T3: 하드 트리거 — "또 수정하셔서"는 상대 행동을 직접 판단 → NEGATIVE_FEEDBACK
+            T5: RED 자문 — (1)삭제해도 이해됨 YES (2)유용한 업무 사실 NO (3)발신자 개인 상태(멘탈/직무 피로) YES → PRIVATE_TMI (RED). 고객에게 불필요한 개인 사정
 
             ## 예시 3
 
@@ -181,7 +272,8 @@ public class StructureLabelService {
             T4: 솔직히 수업 시간에 만날 떠들어서 다른 애들한테도 피해줌
             T5: 내 탓하려고 시동건다
             T6: 아무튼 수학이랑 영어는 보충수업 들어야 할 것 같고요
-            T7: 다음 주에 상담 한번 잡으면 좋겠습니다
+            T7: 님도 애를 좀 잡아봐
+            T8: 다음 주에 상담 한번 잡으면 좋겠습니다
 
             [정답]
             T1|COURTESY
@@ -190,22 +282,24 @@ public class StructureLabelService {
             T4|NEGATIVE_FEEDBACK
             T5|PERSONAL_ATTACK
             T6|CORE_INTENT
-            T7|REQUEST
+            T7|NEGATIVE_FEEDBACK
+            T8|REQUEST
 
             [판단 근거]
-            T2: "시험을 망해서 놀라셨죠"는 거친 표현이지만, 시험 결과 + 학부모 반응이라는 내용 자체가 서론으로 필요 → GREEN (CORE_FACT)
-            T3: "안 쳐한거임"은 학습 부진이라는 부정적 평가 → 문제→개선 프레임 전환 필요 → NEGATIVE_FEEDBACK (YELLOW)
-            T4: 수업 태도에 대한 부정적 피드백 → 재구성 필요 → NEGATIVE_FEEDBACK (YELLOW)
-            T5: "내 탓하려고 시동건다"는 사실 정보 없는 인신공격 → PERSONAL_ATTACK (RED)
-            T7: "상담 잡으면 좋겠습니다"는 명시적 요청 → REQUEST (GREEN)
+            T2: 시험 결과 + 학부모 반응이라는 내용 자체가 서론으로 필요. 하드 트리거 없음 → GREEN (CORE_FACT)
+            T3: 하드 트리거 — "안 쳐한거임"은 학생 능력 직접 평가 → NEGATIVE_FEEDBACK
+            T4: 하드 트리거 — "만날 떠들어서"는 비난 어조+일반화. 수업 태도 부정적 피드백 → NEGATIVE_FEEDBACK
+            T5: 삭제해도 이해됨 + 사실 없이 비난만 → PERSONAL_ATTACK (RED)
+            T7: 하드 트리거 — "애를 잡아봐"는 요청 형태이지만 양육 지시(PARENT 수신자 영역 침범) → NEGATIVE_FEEDBACK
 
             선택사항(마지막 줄): SUMMARY: 핵심 용건을 1-2문장으로 요약
 
             ## 필수 규칙
             - **모든 세그먼트에 반드시 라벨을 부여하세요.** 빠뜨리는 세그먼트가 없어야 합니다.
-            - **RED는 극도로 보수적으로.** 내용이 조금이라도 필요하면 GREEN 또는 YELLOW. 빼서 맥락이 끊기면 YELLOW.
-            - **GREEN vs YELLOW**: 내용 자체를 바꿀 필요 없으면 GREEN, 재구성이 필요하면 YELLOW.
-            - **YELLOW 라벨 선택**: 어떤 재작성 전략이 필요한지에 따라 6개 YELLOW 라벨 중 가장 적합한 것 선택.
+            - **RED는 극도로 보수적으로.** 단, RED 강화 규칙에 해당하면 적용.
+            - **GREEN vs YELLOW 핵심**: 하드 트리거 1개+ 또는 소프트 트리거 2개+ → YELLOW. 표면 형태에 속지 말고 실제 기능으로 판단.
+            - **수신자 관점 필수 체크**: persona의 입장에서, 관계 경계 침범 여부 확인.
+            - **YELLOW 라벨 선택**: 5개 YELLOW 라벨 중 재작성 전략이 가장 적합한 것 선택.
             - RED 전 반드시 자문: "이걸 통째로 삭제하면 메시지가 여전히 이해되는가?"
 
             금지: {{TYPE_N}} 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}}) 수정""";
@@ -257,7 +351,6 @@ public class StructureLabelService {
             totalCompletion += retryResult.completionTokens();
 
             if (!retryLabeled.isEmpty()) {
-                // Fill any still-missing segments with CORE_FACT default
                 retryLabeled = fillMissingLabels(retryLabeled, segments);
                 return new StructureLabelResult(retryLabeled, retrySummary, totalPrompt, totalCompletion);
             }
@@ -265,19 +358,22 @@ public class StructureLabelService {
             // Both attempts failed — fallback: label all segments as COURTESY (GREEN)
             log.warn("[StructureLabel] Both attempts failed, falling back to all-COURTESY labels for {} segments", segments.size());
             List<LabeledSegment> fallback = segments.stream()
-                    .map(seg -> new LabeledSegment(seg.id(), SegmentLabel.COURTESY, seg.text()))
+                    .map(seg -> new LabeledSegment(seg.id(), SegmentLabel.COURTESY, seg.text(), seg.start(), seg.end()))
                     .toList();
             return new StructureLabelResult(fallback, retrySummary, totalPrompt, totalCompletion);
         }
 
-        // Check for suspiciously all-GREEN labeling (when enough segments exist)
+        // All-GREEN 3-level response:
+        // (A) YELLOW awareness expansion is in the prompt itself
+        // (B) 2-pass scanning: if 4+ segments all GREEN, re-check hard/soft triggers
         if (segments.size() >= 4 && isAllGreen(labeled)) {
-            log.warn("[StructureLabel] All {} segments labeled GREEN with {}+ segments — retrying with diversity nudge",
+            log.warn("[StructureLabel] All {} segments labeled GREEN with {}+ segments — retrying with 2-pass nudge",
                     labeled.size(), segments.size());
             String diversityMessage = userMessage + "\n\n[시스템 경고] 모든 세그먼트를 GREEN으로 분류했습니다. " +
-                    "각 세그먼트의 내용을 받는 사람과의 관계에서 다시 평가하세요: " +
-                    "완전히 불필요한 내용(공격, 인신공격, 순수 넋두리, 불필요한 TMI)이 정말 없는지, " +
-                    "내용은 필요하지만 재구성이 필요한 것(책임 소재, 해명, 부정적 평가, 감정 토로, 추측, 장황한 설명)은 없는지 확인하세요.";
+                    "2차 스캔: 각 세그먼트의 하드/소프트 트리거를 다시 확인하세요. " +
+                    "억지 YELLOW는 금지하되, 놓친 트리거가 있으면 수정하세요. " +
+                    "확인 항목: (1) 상대 행동/능력 판단, (2) 비난 어조+일반화, (3) 감정 직접 폭발, " +
+                    "(4) 방어적 변명 구조, (5) 외부 귀책+불만 결합, (6) 추측, (7) 동일 내용 반복";
             LlmCallResult diversityResult = aiTransformService.callOpenAIWithModel(
                     MODEL, SYSTEM_PROMPT, diversityMessage, TEMPERATURE, MAX_TOKENS, null);
 
@@ -292,7 +388,6 @@ public class StructureLabelService {
                 boolean hasNonGreen = diversityLabeled.stream()
                         .anyMatch(s -> s.label().tier() != SegmentLabel.Tier.GREEN);
                 if (hasNonGreen) {
-                    // Merge: use diversity labels for segments it labeled, fall back to original for the rest
                     diversityLabeled = fillMissingFromOriginal(diversityLabeled, labeled, segments);
                     return new StructureLabelResult(diversityLabeled,
                             diversitySummary != null ? diversitySummary : summary,
@@ -339,8 +434,12 @@ public class StructureLabelService {
 
     /**
      * Parse LLM output lines: SEG_ID|LABEL (2-column format).
-     * Text is always looked up from the original segments by ID,
-     * ensuring exact match with maskedText for reliable redaction.
+     * Text is always looked up from the original segments by ID.
+     *
+     * Enhanced parsing:
+     * - valueOf success → use directly
+     * - valueOf fail → check migration map (old label names)
+     * - migration map miss → default to COURTESY + warn (coverage protection)
      */
     private List<LabeledSegment> parseOutput(String output, String maskedText, List<Segment> segments) {
         List<LabeledSegment> result = new ArrayList<>();
@@ -388,22 +487,41 @@ public class StructureLabelService {
                 continue;
             }
 
-            try {
-                SegmentLabel label = SegmentLabel.valueOf(labelStr);
-
-                // Always use text from the original segment (not LLM output)
-                Segment seg = segmentMap.get(segId);
-                if (seg != null) {
-                    result.add(new LabeledSegment(segId, label, seg.text()));
-                } else {
-                    log.debug("[StructureLabel] Unknown segment ID '{}', skipping", segId);
-                }
-            } catch (IllegalArgumentException e) {
-                log.debug("[StructureLabel] Unknown label '{}' for segment {}", labelStr, segId);
+            // Look up the segment — skip if unknown ID
+            Segment seg = segmentMap.get(segId);
+            if (seg == null) {
+                log.debug("[StructureLabel] Unknown segment ID '{}', skipping", segId);
+                continue;
             }
+
+            // Resolve label: valueOf → migration map → COURTESY default
+            SegmentLabel label = resolveLabel(labelStr, segId);
+            result.add(new LabeledSegment(segId, label, seg.text(), seg.start(), seg.end()));
         }
 
         return result;
+    }
+
+    /**
+     * Resolve a label string to a SegmentLabel enum value.
+     * Falls back to migration map for old label names, then to COURTESY as last resort.
+     */
+    private SegmentLabel resolveLabel(String labelStr, String segId) {
+        // 1. Try direct valueOf
+        try {
+            return SegmentLabel.valueOf(labelStr);
+        } catch (IllegalArgumentException ignored) {}
+
+        // 2. Try migration map (old label names → new labels)
+        SegmentLabel migrated = MIGRATION_MAP.get(labelStr);
+        if (migrated != null) {
+            log.warn("[StructureLabel] Migrated old label '{}' → '{}' for segment {}", labelStr, migrated, segId);
+            return migrated;
+        }
+
+        // 3. Unknown label — default to COURTESY for coverage protection
+        log.warn("[StructureLabel] Unknown label '{}' for segment {}, defaulting to COURTESY", labelStr, segId);
+        return SegmentLabel.COURTESY;
     }
 
     private String parseSummary(String output) {
@@ -419,8 +537,6 @@ public class StructureLabelService {
 
     /**
      * Fill in missing segments with COURTESY (GREEN) default label.
-     * COURTESY is the safest GREEN label — model only adjusts style, no special preservation needed.
-     * Ensures every segment from MeaningSegmenter has a corresponding label.
      */
     private List<LabeledSegment> fillMissingLabels(List<LabeledSegment> labeled, List<Segment> segments) {
         Set<String> labeledIds = labeled.stream()
@@ -429,7 +545,7 @@ public class StructureLabelService {
 
         List<LabeledSegment> missing = segments.stream()
                 .filter(seg -> !labeledIds.contains(seg.id()))
-                .map(seg -> new LabeledSegment(seg.id(), SegmentLabel.COURTESY, seg.text()))
+                .map(seg -> new LabeledSegment(seg.id(), SegmentLabel.COURTESY, seg.text(), seg.start(), seg.end()))
                 .toList();
 
         if (!missing.isEmpty()) {
@@ -445,7 +561,6 @@ public class StructureLabelService {
 
     /**
      * Fill missing segments in diversity result using original labels first, COURTESY as last resort.
-     * Prevents diversity retry from being defeated by auto-fill to all-GREEN.
      */
     private List<LabeledSegment> fillMissingFromOriginal(List<LabeledSegment> diversityLabeled,
                                                           List<LabeledSegment> originalLabeled,
@@ -457,18 +572,14 @@ public class StructureLabelService {
         java.util.Map<String, LabeledSegment> originalMap = originalLabeled.stream()
                 .collect(Collectors.toMap(LabeledSegment::segmentId, ls -> ls, (a, b) -> a));
 
-        java.util.Map<String, Segment> segmentMap = segments.stream()
-                .collect(Collectors.toMap(Segment::id, s -> s, (a, b) -> a));
-
         List<LabeledSegment> combined = new ArrayList<>(diversityLabeled);
         for (Segment seg : segments) {
             if (!diversityIds.contains(seg.id())) {
-                // Prefer original label over default
                 LabeledSegment original = originalMap.get(seg.id());
                 if (original != null) {
                     combined.add(original);
                 } else {
-                    combined.add(new LabeledSegment(seg.id(), SegmentLabel.COURTESY, seg.text()));
+                    combined.add(new LabeledSegment(seg.id(), SegmentLabel.COURTESY, seg.text(), seg.start(), seg.end()));
                 }
             }
         }
@@ -479,7 +590,6 @@ public class StructureLabelService {
         if (labeled.isEmpty()) return false;
         if (segments.isEmpty()) return false;
 
-        // Check segment count coverage (not text length)
         double coverage = (double) labeled.size() / segments.size();
         if (coverage < MIN_COVERAGE) {
             log.warn("[StructureLabel] Low segment coverage: {} of {} ({}%, min: {}%)",
@@ -487,7 +597,6 @@ public class StructureLabelService {
             return false;
         }
 
-        // Check at least one CORE_FACT, CORE_INTENT, or REQUEST
         boolean hasCoreGreen = labeled.stream().anyMatch(s ->
                 s.label() == SegmentLabel.CORE_FACT || s.label() == SegmentLabel.CORE_INTENT || s.label() == SegmentLabel.REQUEST);
         if (!hasCoreGreen) {

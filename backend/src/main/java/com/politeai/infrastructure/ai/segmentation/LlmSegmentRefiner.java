@@ -20,7 +20,7 @@ import java.util.regex.Pattern;
  * are batched into a single LLM call (gpt-4o-mini, temp=0) for semantic splitting.
  *
  * Flow:
- *   1. Filter segments > minLength (default 80 chars)
+ *   1. Filter segments > minLength (default 40 chars)
  *   2. Batch long segments into one prompt
  *   3. LLM inserts ||| delimiters at semantic boundaries
  *   4. Parse response, validate sub-texts exist in original
@@ -39,21 +39,21 @@ public class LlmSegmentRefiner {
 
     private static final String SYSTEM_PROMPT =
             "당신은 한국어 텍스트 의미 분절 전문가입니다.\n\n" +
+            "각 항목이 둘 이상의 독립된 의미 단위(완결된 생각/주장/사실)를 포함할 때만 분리하세요.\n" +
+            "하나의 의미 단위라면 길더라도 원문 그대로 출력하세요. 무리하게 쪼개지 마세요.\n\n" +
             "규칙:\n" +
-            "1. 각 항목을 의미 단위(하나의 완결된 생각/주장/사실)로 분리하세요\n" +
-            "2. 분리 지점에 ||| 를 삽입하세요\n" +
-            "3. 원문 텍스트를 정확히 보존하세요 (한 글자도 변경/추가/삭제 금지)\n" +
-            "4. {{TYPE_N}} 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}})는 절대 분리하지 마세요\n" +
-            "5. 분리가 불필요하면 원문 그대로 출력하세요\n" +
-            "6. 너무 짧은 조각(10자 미만)이 생기지 않도록 하세요\n" +
-            "7. [N] 번호를 유지하고, 각 항목을 한 줄에 출력하세요";
+            "1. 분리 시 ||| 를 삽입하세요\n" +
+            "2. 원문 텍스트를 정확히 보존하세요 (한 글자도 변경/추가/삭제 금지)\n" +
+            "3. {{TYPE_N}} 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}})는 절대 분리하지 마세요\n" +
+            "4. 너무 짧은 조각(10자 미만)이 생기지 않도록 하세요\n" +
+            "5. [N] 번호를 유지하고, 각 항목을 한 줄에 출력하세요";
 
     private static final Pattern ENTRY_PATTERN = Pattern.compile("\\[(\\d+)]\\s*(.+)");
     private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{\\{[A-Z]+_\\d+\\}\\}");
 
     private final AiTransformService aiTransformService;
 
-    @Value("${segmenter.refine.min-length:80}")
+    @Value("${segmenter.refine.min-length:40}")
     private int minLength;
 
     public record RefineResult(List<Segment> segments, long promptTokens, long completionTokens) {}

@@ -6,17 +6,19 @@ interface Props {
 }
 
 const LABEL_DISPLAY: Record<string, string> = {
+  // GREEN (5)
   CORE_FACT: '핵심사실',
   CORE_INTENT: '핵심의도',
   REQUEST: '요청',
   APOLOGY: '사과',
   COURTESY: '예의',
+  // YELLOW (5)
   ACCOUNTABILITY: '책임소재',
-  SELF_EXPLAIN: '상황설명',
+  SELF_JUSTIFICATION: '자기변호',
   NEGATIVE_FEEDBACK: '부정적 평가',
   EMOTIONAL: '감정표현',
-  SPECULATION: '추측',
-  OVER_EXPLANATION: '과잉설명',
+  EXCESS_DETAIL: '과잉설명',
+  // RED (4)
   AGGRESSION: '공격/비꼬기',
   PERSONAL_ATTACK: '인신공격',
   PRIVATE_TMI: '사적정보',
