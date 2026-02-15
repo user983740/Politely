@@ -87,28 +87,13 @@ public class GatingConditionEvaluator {
     }
 
     /**
-     * Relation/Intent ON conditions (OR):
-     *   1. persona = OTHER (ambiguous)
-     *   2. textLength > 600 OR transitionWords > 8
+     * Relation/Intent: always ON.
+     * Cost ~$0.0001/call, latency 0ms (parallel with StructureLabel).
+     * Provides relation/intent/stance context to Final model, reducing hallucination and tone errors.
      */
     public boolean shouldFireRelationIntent(Persona persona, String text) {
-        if (persona == Persona.OTHER) {
-            log.info("[Gating] RelationIntent: ON (persona=OTHER)");
-            return true;
-        }
-
-        if (text.length() > relationIntentMinTextLength) {
-            log.info("[Gating] RelationIntent: ON (textLength={})", text.length());
-            return true;
-        }
-
-        int transitionCount = countTransitionWords(text);
-        if (transitionCount > relationIntentMinTransitionWords) {
-            log.info("[Gating] RelationIntent: ON (transitionWords={})", transitionCount);
-            return true;
-        }
-
-        return false;
+        log.info("[Gating] RelationIntent: ON (always-on)");
+        return true;
     }
 
     private int countTransitionWords(String text) {

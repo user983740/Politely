@@ -484,6 +484,30 @@ public class OutputValidator {
                     }
                 }
             }
+
+            // Check 1b: Semantic keyword reentry — extract key nouns from RED text,
+            // flag WARNING if 2+ distinctive keywords appear together in output
+            for (Map.Entry<String, String> entry : redactionMap.entrySet()) {
+                String originalText = entry.getValue();
+                List<String> keywords = extractMeaningWords(originalText);
+                // Only check with distinctive words (3+ chars to avoid false positives)
+                List<String> distinctiveKeywords = keywords.stream()
+                        .filter(w -> w.length() >= 3 && !STOPWORDS.contains(w))
+                        .toList();
+                if (distinctiveKeywords.size() >= 2) {
+                    long matchCount = distinctiveKeywords.stream()
+                            .filter(finalText::contains)
+                            .count();
+                    if (matchCount >= 2) {
+                        issues.add(new ValidationIssue(
+                                ValidationIssueType.REDACTED_REENTRY,
+                                Severity.WARNING,
+                                "제거된 내용 의미적 재유입 의심: \"" + originalText.substring(0, Math.min(30, originalText.length())) + "...\" (키워드 " + matchCount + "개 일치)",
+                                entry.getKey()
+                        ));
+                    }
+                }
+            }
         }
 
         // Check 2: Censorship trace phrases in output

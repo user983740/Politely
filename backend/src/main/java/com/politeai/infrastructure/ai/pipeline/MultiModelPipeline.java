@@ -360,11 +360,17 @@ public class MultiModelPipeline {
         List<MultiModelPromptBuilder.OrderedSegment> orderedSegments = new ArrayList<>();
         for (int i = 0; i < sorted.size(); i++) {
             LabeledSegment ls = sorted.get(i);
-            String dedupeKey = ls.label().tier() == SegmentLabel.Tier.RED ? null : buildDedupeKey(ls.text());
+            boolean isRed = ls.label().tier() == SegmentLabel.Tier.RED;
+            String dedupeKey = isRed ? null : buildDedupeKey(ls.text());
+            // Extract mustInclude placeholders for YELLOW segments
+            List<String> mustInclude = (ls.label().tier() == SegmentLabel.Tier.YELLOW)
+                    ? MultiModelPromptBuilder.extractPlaceholders(ls.text())
+                    : List.of();
             orderedSegments.add(new MultiModelPromptBuilder.OrderedSegment(
                     ls.segmentId(), i + 1, ls.label().tier().name(), ls.label().name(),
-                    ls.label().tier() == SegmentLabel.Tier.RED ? null : ls.text(),
-                    dedupeKey
+                    isRed ? null : ls.text(),
+                    dedupeKey,
+                    mustInclude
             ));
         }
 
@@ -453,8 +459,9 @@ public class MultiModelPipeline {
                             .map(ValidationIssue::message).toList());
             String retryUser = prompt.userMessage() + errorHint + lockedSpanHint;
 
+            // Retry with lower temperature (0.3) for more conservative output
             LlmCallResult retryResult = aiTransformService.callOpenAIWithModel(
-                    finalModelName, retrySystemPrompt, retryUser, -1, maxTokens, null);
+                    finalModelName, retrySystemPrompt, retryUser, 0.3, maxTokens, null);
             LockedSpanMasker.UnmaskResult retryUnmask = spanMasker.unmask(
                     retryResult.content(), prompt.lockedSpans());
             validation = outputValidator.validate(

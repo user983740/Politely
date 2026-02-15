@@ -7,7 +7,10 @@ import com.politeai.infrastructure.ai.pipeline.template.StructureTemplate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -25,14 +28,33 @@ public class MultiModelPromptBuilder {
      * Ordered segment DTO for the Final model user message.
      * Created by MultiModelPipeline.buildFinalPrompt().
      */
+    private static final Pattern PLACEHOLDER_IN_TEXT = Pattern.compile("\\{\\{[A-Z_]+_\\d+\\}\\}");
+
     public record OrderedSegment(
             String id,
             int order,
             String tier,
             String label,
             String text,       // null for RED
-            String dedupeKey   // null for RED
-    ) {}
+            String dedupeKey,  // null for RED
+            List<String> mustInclude  // placeholders in YELLOW segments that must appear in output
+    ) {
+        /** Backwards-compatible constructor without mustInclude */
+        public OrderedSegment(String id, int order, String tier, String label, String text, String dedupeKey) {
+            this(id, order, tier, label, text, dedupeKey, List.of());
+        }
+    }
+
+    /**
+     * Extract {{TYPE_N}} placeholders from segment text.
+     */
+    static List<String> extractPlaceholders(String text) {
+        if (text == null) return List.of();
+        List<String> result = new ArrayList<>();
+        Matcher m = PLACEHOLDER_IN_TEXT.matcher(text);
+        while (m.find()) result.add(m.group());
+        return result;
+    }
 
     // ===== Final Model: Transform with 3-tier structure analysis (JSON format) =====
 
@@ -54,6 +76,7 @@ public class MultiModelPromptBuilder {
             - 서버가 후처리로 실제 값으로 복원하므로, 값으로 풀어 쓰거나 새로 만들거나 삭제하면 안 됨
             - segments 배열의 text에 포함된 {{TYPE_N}}은 해당 세그먼트를 재작성할 때 반드시 출력 문장에 포함해야 함
             - ⚠️ **YELLOW 세그먼트 주의**: 재작성 시 문장 구조를 바꾸더라도 원문 text 안의 플레이스홀더를 빠뜨리지 말 것. 쿠션/방향 문장을 추가하더라도 플레이스홀더가 포함된 사실 부분은 반드시 유지
+            - ⚠️ `mustInclude` 배열이 있는 세그먼트: 해당 플레이스홀더를 출력에 반드시 포함해야 함. YELLOW 재작성으로 문장을 바꾸더라도 mustInclude 항목은 절대 생략 금지
             - ⚠️ GREEN 세그먼트 재구성 시에도 플레이스홀더 누락 금지
             - **최종 검증**: placeholders 객체의 모든 키가 출력에 정확히 1회 이상 존재해야 함. 하나라도 누락되면 검증 실패
 
@@ -61,16 +84,18 @@ public class MultiModelPromptBuilder {
 
             ### GREEN (내용 보존, 표현 재구성) — 적극 다듬기
             원문 문장을 재사용하지 말고 의미를 유지한 **새 문장**으로 재구성.
-            구어체/나열식 → 명확한 전달체로.
+            **⚠️ 구어체/비표준 맞춤법 해석 필수**: 원문이 비표준 맞춤법이나 구어체여도 의미를 정확히 파악한 후 재구성.
+            예: "안 쳐한거임"="노력하지 않은 것", "시험 망함"="성적이 부진함", "이 꼴"="이 상황", "갈아엎다"="전면 개편하다"
             라벨별 전략:
             - CORE_FACT → 사실·수치·날짜·원인 정확 보존 + 명확한 전달체
-            - CORE_INTENT → 핵심 의도·제안·대안 보존 + 명확하고 전문적으로
+            - CORE_INTENT → 핵심 의도·제안·대안 보존 + 명확하고 전문적으로. **구어체 표현을 비즈니스체로 전환** (예: "갈아엎다"→"개선하다/재구성하다")
             - REQUEST → 요청 대상·행동·기한·조건 보존. 기한/긴급도 완곡화 금지, 표현만 정중하게
             - APOLOGY → 사과 대상·이유 보존 + 진정성 있는 정중한 사과
             - COURTESY → 관계에 맞는 자연스러운 인사 (맨앞/끝 1줄 허용)
 
             ⚠️ GREEN 의미 불변 제약 (위반 시 할루시네이션):
             - 요청의 대상/행동/기한/조건, 사실(수치/날짜/원인/결과) 변경·추가·삭제 금지
+            - **원문의 의미를 다른 의미로 바꾸지 말 것** (예: "성적이 나쁘다"를 "시험을 보지 않았다"로 바꾸면 안 됨)
             - 원문에 없는 행동 약속(후속 조치/재발 방지/내부 확인 등) 추가 금지
             - 각 GREEN 세그먼트 최대 1~3문장, 220자 이내
 
@@ -94,27 +119,39 @@ public class MultiModelPromptBuilder {
               ① 쿠션: persona에 맞는 자연스러운 도입 표현 사용 (아래 persona 블록 참조). "내부 확인 결과" 금지
               ② 사실: 주어를 상대방→상황/시스템/프로세스로 전환. 인과관계(A→B→결과) 보존하되 비난 제거
               ③ 방향: 원인 공유 목적임을 명시
+              ✗ 금지 예시: "고객님의 서버 설정에 이상이 있어" (직접 귀책)
+              ✓ 올바른 예시: "확인 결과, 서버 설정 부분에서 차이가 발생한 것으로 파악되었습니다" (주어=시스템)
             - SELF_JUSTIFICATION:
               ① 쿠션: "말씀 주신 부분 관련하여" / "해당 건 배경을 말씀드리면"
-              ② 사실: 업무 맥락(일정/원인/의존성) 보존. 방어 구조("어쩔 수 없었다" 류) 제거
+              ② 사실: 업무 맥락(일정/원인/의존성) 보존. 방어 구조("어쩔 수 없었다"/"사실 ~했다" 류) 제거
               ③ 방향: 해결 의지 마무리 ("향후 ~하도록 하겠습니다")
+              ✗ 금지 예시: "사실 어제도 새벽 3시까지 작업했습니다" (방어적 "사실"+고생 강조)
+              ✓ 올바른 예시: "해당 건에 대해 지속 작업을 진행하고 있습니다" (사실만, 방어 프레임 제거)
             - NEGATIVE_FEEDBACK:
               ① 쿠션: "~해 주신 점 감사합니다" / "~부분은 잘 진행되고 있습니다" (긍정 인정 선행)
-              ② 사실: 개선 필요 사항을 요청 형태로 전환. 지적("~하지 마세요")→요청("~해 주시면")
+              ② 사실: 개선 필요 사항을 요청 형태로 전환. 지적("~하지 마세요")→요청("~해 주시면"). **원문에 언급된 구체적 대상(파일명, 시스템명 등)은 반드시 포함**
               ③ 방향: 기대 효과 제시 ("그러면 ~에 도움이 될 것 같습니다"). 심각도·긴급도 유지
               ※ CLIENT/OFFICIAL persona 추가 규칙: 직접 거부/판단 표현("과한 것으로 판단", "어렵습니다", "불가합니다") 금지. 원인 파악→조치 안내 순서로 전환. 예: "우선 원인을 정확히 파악한 후 적절한 조치를 안내드리겠습니다"
+              ✗ 금지 예시: "솔직히 이런 일정이면 퀄리티가 떨어집니다" (원문 불만 그대로)
+              ✓ 올바른 예시: "일정과 품질의 균형에 대해 조율이 필요할 것 같습니다" (불만→건설적 요청)
             - EMOTIONAL:
               ① 쿠션: "솔직히 말씀드리면" / "양해 말씀 구하며"
-              ② 사실: 감정을 삭제하지 말고 간접 표현으로 전환 ("부담이 되는 부분이 있어", "우려가 됩니다")
+              ② 사실: 감정을 삭제하지 말고 **반드시 간접 표현으로 전환**
               ③ 방향: 협조 의지 마무리 ("함께 좋은 방향을 찾을 수 있으면 합니다")
+              ✗ 금지 예시: "억울한 감정이 드는 부분도 있지만" (직접 감정 표현 유지)
+              ✓ 올바른 예시: "부담이 되는 부분이 있었지만" (감정→간접 상태 표현)
             - EXCESS_DETAIL:
               ① 중복 제거 + 추측→가능성 전환 ("~일 가능성이 있어 보입니다")
               ② 논리 체인(A→B→C) 압축 보존 — 핵심 인과만 남기고 반복/부연 제거
+              ③ **구어체→비즈니스체 전환 필수**: "꼬여서"→"이슈가 발생하여", "난리"→"문제가 발생"
 
             ### RED (완전 삭제 — 흔적 없음)
             text가 null → 내용을 알 수 없음.
             최종 출력에서 RED의 존재 자체를 언급/암시 금지 ("일부 내용을 삭제했습니다", "[삭제됨]" 등 표현 금지).
             RED 자리에 새 문장 만들지 않고, 인접 블록을 자연스럽게 연결.
+            ⚠️ **RED 추론/재생성 절대 금지**: 인접 YELLOW/GREEN 세그먼트의 맥락에서 RED 내용을 추론하여 새로 생성하지 말 것.
+            예: RED가 "개인 사정" 관련이었더라도 출력에 "개인적인 사정도 있었지만" 같은 문구 생성 금지.
+            RED의 text는 null이므로 그 주제/내용을 암시하는 어떤 표현도 출력하면 안 됨.
 
             ## 중복 제거 규칙 (dedupeKey + order 기준)
             - dedupeKey 동일 → 가장 구체적인 것 하나만 사용. 구체성 동등하면 order 큰 것(원문상 뒤) 채택
@@ -259,6 +296,14 @@ public class MultiModelPromptBuilder {
             if (seg.text() != null) {
                 sb.append(",\"text\":\"").append(escapeJson(seg.text())).append("\"");
                 sb.append(",\"dedupeKey\":\"").append(escapeJson(seg.dedupeKey())).append("\"");
+                // Add mustInclude for YELLOW segments with placeholders
+                if (!seg.mustInclude().isEmpty()) {
+                    sb.append(",\"mustInclude\":[");
+                    sb.append(seg.mustInclude().stream()
+                            .map(p -> "\"" + escapeJson(p) + "\"")
+                            .collect(Collectors.joining(",")));
+                    sb.append("]");
+                }
             } else {
                 sb.append(",\"text\":null,\"dedupeKey\":null");
             }
