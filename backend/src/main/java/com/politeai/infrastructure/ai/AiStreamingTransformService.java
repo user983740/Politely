@@ -11,7 +11,7 @@ import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.AnalysisPhaseResult;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.FinalPromptPair;
 import com.politeai.infrastructure.ai.pipeline.MultiModelPipeline.PipelineProgressCallback;
-import com.politeai.infrastructure.ai.pipeline.RelationIntentService;
+import com.politeai.infrastructure.ai.pipeline.SituationAnalysisService;
 import com.politeai.infrastructure.ai.pipeline.template.StructureTemplate;
 import com.politeai.infrastructure.ai.preprocessing.LockedSpanMasker;
 import com.politeai.infrastructure.ai.validation.OutputValidator;
@@ -144,15 +144,22 @@ public class AiStreamingTransformService {
                     }
 
                     @Override
-                    public void onRelationIntent(boolean fired, RelationIntentService.RelationIntentResult result) throws Exception {
+                    public void onSituationAnalysis(boolean fired, SituationAnalysisService.SituationAnalysisResult result) throws Exception {
                         if (fired && result != null) {
-                            Map<String, String> riData = new LinkedHashMap<>();
-                            riData.put("relation", result.relation());
-                            riData.put("intent", result.intent());
-                            riData.put("stance", result.stance());
+                            Map<String, Object> saData = new LinkedHashMap<>();
+                            List<Map<String, String>> factsData = result.facts().stream()
+                                    .map(f -> {
+                                        Map<String, String> m = new LinkedHashMap<>();
+                                        m.put("content", f.content());
+                                        m.put("source", f.source());
+                                        return m;
+                                    })
+                                    .toList();
+                            saData.put("facts", factsData);
+                            saData.put("intent", result.intent());
                             emitter.send(SseEmitter.event()
-                                    .name("relationIntent")
-                                    .data(objectMapper.writeValueAsString(riData)));
+                                    .name("situationAnalysis")
+                                    .data(objectMapper.writeValueAsString(saData)));
                         }
                     }
 
@@ -269,7 +276,7 @@ public class AiStreamingTransformService {
                 statsData.put("lockedSpanCount", analysis.lockedSpans().size());
                 statsData.put("retryCount", retryCount);
                 statsData.put("identityBoosterFired", analysis.identityBoosterFired());
-                statsData.put("relationIntentFired", analysis.relationIntentFired());
+                statsData.put("situationAnalysisFired", analysis.situationAnalysisFired());
                 statsData.put("contextGatingFired", analysis.contextGatingFired());
                 statsData.put("chosenTemplateId", analysis.chosenTemplateId());
                 statsData.put("latencyMs", totalLatency);

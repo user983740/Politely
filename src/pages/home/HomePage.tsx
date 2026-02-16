@@ -87,7 +87,7 @@ export default function HomePage() {
     pipelineStats,
     segments,
     maskedText,
-    relationIntent,
+    situationAnalysis,
     processedSegments,
     validationIssues,
     chosenTemplate,
@@ -108,7 +108,7 @@ export default function HomePage() {
     setPipelineStats,
     setSegments,
     setMaskedText,
-    setRelationIntent,
+    setSituationAnalysis,
     setProcessedSegments,
     setValidationIssues,
     setChosenTemplate,
@@ -157,7 +157,7 @@ export default function HomePage() {
     setPipelineStats(null);
     setSegments(null);
     setMaskedText(null);
-    setRelationIntent(null);
+    setSituationAnalysis(null);
     setProcessedSegments(null);
     setValidationIssues(null);
     setChosenTemplate(null);
@@ -200,7 +200,7 @@ export default function HomePage() {
           },
           onSegments: (data) => setSegments(data),
           onMaskedText: (text) => setMaskedText(text),
-          onRelationIntent: (data) => setRelationIntent(data),
+          onSituationAnalysis: (data) => setSituationAnalysis(data),
           onProcessedSegments: (data) => setProcessedSegments(data),
           onValidationIssues: (issues) => setValidationIssues(issues),
           onPhase: (phase) => setCurrentPhase(phase),
@@ -492,7 +492,7 @@ export default function HomePage() {
               segments={segments}
               maskedText={maskedText}
               labels={labels}
-              relationIntent={relationIntent}
+              situationAnalysis={situationAnalysis}
               processedSegments={processedSegments}
               validationIssues={validationIssues}
               chosenTemplate={chosenTemplate}

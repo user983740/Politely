@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Persona, Context, ToneLevel, Topic, Purpose } from '@/shared/config/constants';
-import type { LabelData, StatsData, UsageInfo, SegmentData, RelationIntentData, ValidationIssueData, PipelinePhase, ProcessedSegmentsData, TemplateSelectedData } from '@/features/transform/stream-api';
+import type { LabelData, StatsData, UsageInfo, SegmentData, SituationAnalysisData, ValidationIssueData, PipelinePhase, ProcessedSegmentsData, TemplateSelectedData } from '@/features/transform/stream-api';
 
 interface TransformState {
   persona: Persona | null;
@@ -17,7 +17,7 @@ interface TransformState {
   pipelineStats: StatsData | null;
   segments: SegmentData[] | null;
   maskedText: string | null;
-  relationIntent: RelationIntentData | null;
+  situationAnalysis: SituationAnalysisData | null;
   processedSegments: ProcessedSegmentsData | null;
   validationIssues: ValidationIssueData[] | null;
   chosenTemplate: TemplateSelectedData | null;
@@ -40,7 +40,7 @@ interface TransformState {
   setPipelineStats: (stats: StatsData | null) => void;
   setSegments: (segments: SegmentData[] | null) => void;
   setMaskedText: (text: string | null) => void;
-  setRelationIntent: (data: RelationIntentData | null) => void;
+  setSituationAnalysis: (data: SituationAnalysisData | null) => void;
   setProcessedSegments: (data: ProcessedSegmentsData | null) => void;
   setValidationIssues: (issues: ValidationIssueData[] | null) => void;
   setChosenTemplate: (data: TemplateSelectedData | null) => void;
@@ -67,7 +67,7 @@ const initialState = {
   pipelineStats: null as StatsData | null,
   segments: null as SegmentData[] | null,
   maskedText: null as string | null,
-  relationIntent: null as RelationIntentData | null,
+  situationAnalysis: null as SituationAnalysisData | null,
   processedSegments: null as ProcessedSegmentsData | null,
   validationIssues: null as ValidationIssueData[] | null,
   chosenTemplate: null as TemplateSelectedData | null,
@@ -100,7 +100,7 @@ export const useTransformStore = create<TransformState>((set) => ({
   setPipelineStats: (pipelineStats) => set({ pipelineStats }),
   setSegments: (segments) => set({ segments }),
   setMaskedText: (maskedText) => set({ maskedText }),
-  setRelationIntent: (relationIntent) => set({ relationIntent }),
+  setSituationAnalysis: (situationAnalysis) => set({ situationAnalysis }),
   setProcessedSegments: (processedSegments) => set({ processedSegments }),
   setValidationIssues: (validationIssues) => set({ validationIssues }),
   setChosenTemplate: (chosenTemplate) => set({ chosenTemplate }),
@@ -109,6 +109,6 @@ export const useTransformStore = create<TransformState>((set) => ({
   setTransformError: (transformError) => set({ transformError }),
   setUsageInfo: (usageInfo) => set({ usageInfo }),
   resetForNewInput: () =>
-    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, relationIntent: null, processedSegments: null, validationIssues: null, chosenTemplate: null, currentPhase: null, transformError: null, usageInfo: null }),
+    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, situationAnalysis: null, processedSegments: null, validationIssues: null, chosenTemplate: null, currentPhase: null, transformError: null, usageInfo: null }),
   reset: () => set(initialState),
 }));

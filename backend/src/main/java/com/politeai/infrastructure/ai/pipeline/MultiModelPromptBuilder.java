@@ -241,19 +241,29 @@ public class MultiModelPromptBuilder {
                                          ToneLevel toneLevel, String senderInfo,
                                          List<OrderedSegment> orderedSegments,
                                          List<LockedSpan> allLockedSpans,
-                                         RelationIntentService.RelationIntentResult relationIntent,
+                                         SituationAnalysisService.SituationAnalysisResult situationAnalysis,
                                          String summaryText,
                                          StructureTemplate template,
                                          List<StructureSection> effectiveSections) {
         StringBuilder sb = new StringBuilder();
 
-        // Optional: Relation/Intent analysis
-        if (relationIntent != null &&
-                (!relationIntent.relation().isEmpty() || !relationIntent.intent().isEmpty() || !relationIntent.stance().isEmpty())) {
-            sb.append("--- 관계/의도 분석 ---\n");
-            if (!relationIntent.relation().isEmpty()) sb.append("관계: ").append(relationIntent.relation()).append("\n");
-            if (!relationIntent.intent().isEmpty()) sb.append("의도: ").append(relationIntent.intent()).append("\n");
-            if (!relationIntent.stance().isEmpty()) sb.append("태도: ").append(relationIntent.stance()).append("\n");
+        // Optional: Situation Analysis
+        if (situationAnalysis != null &&
+                (!situationAnalysis.facts().isEmpty() || !situationAnalysis.intent().isEmpty())) {
+            sb.append("--- 상황 분석 ---\n");
+            if (!situationAnalysis.facts().isEmpty()) {
+                sb.append("사실:\n");
+                for (SituationAnalysisService.Fact fact : situationAnalysis.facts()) {
+                    sb.append("- ").append(fact.content());
+                    if (fact.source() != null && !fact.source().isEmpty()) {
+                        sb.append(" (원문: \"").append(fact.source()).append("\")");
+                    }
+                    sb.append("\n");
+                }
+            }
+            if (!situationAnalysis.intent().isEmpty()) {
+                sb.append("의도: ").append(situationAnalysis.intent()).append("\n");
+            }
             sb.append("\n");
         }
 

@@ -26,14 +26,17 @@ import java.util.stream.Collectors;
  * Multi-model pipeline orchestrator (v2).
  *
  * Pipeline:
- *   A) normalize → B) extract+mask (enhanced regex) → C) segment (server)
- *   → C') refine long segments (LLM, conditional)
+ *   [parallel: SituationAnalysis (LLM) + A→G pipeline]
+ *   A) normalize → B) extract+mask (enhanced regex)
+ *   → E?) identityBooster (gating)
+ *   → C) segment (server) → C') refine long segments (LLM, conditional)
  *   → D) structureLabel (LLM #1) → D') RED enforce
- *   → [NEW] Template Select → [NEW?] Context Gating LLM
- *   → E?) identityBooster (gating) → F?) relationIntent (gating)
- *   → G) redact (server) → H) Final LLM #2 → I) unmask → validate → (ERROR: 1 retry)
+ *   → Template Select → Context Gating LLM (optional)
+ *   → G) redact (server)
+ *   → join SituationAnalysis → filterRedFacts
+ *   → H) Final LLM #2 → I) unmask → validate → (ERROR: 1 retry)
  *
- * Base case: 2 LLM calls (+1 if long segments). With gating: up to 6.
+ * Base case: 3 LLM calls (SituationAnalysis + StructureLabel + Final, +1 if long segments). With gating: up to 6.
  */
 @Slf4j
 @Component
@@ -49,7 +52,7 @@ public class MultiModelPipeline {
         void onSpansExtracted(List<LockedSpan> spans, String maskedText) throws Exception;
         void onSegmented(List<Segment> segments) throws Exception;
         void onLabeled(List<LabeledSegment> labeledSegments) throws Exception;
-        void onRelationIntent(boolean fired, RelationIntentService.RelationIntentResult result) throws Exception;
+        void onSituationAnalysis(boolean fired, SituationAnalysisService.SituationAnalysisResult result) throws Exception;
         void onRedacted(List<LabeledSegment> labeledSegments, int redCount) throws Exception;
         void onTemplateSelected(StructureTemplate template, boolean gatingFired) throws Exception;
 
@@ -59,7 +62,7 @@ public class MultiModelPipeline {
                 @Override public void onSpansExtracted(List<LockedSpan> spans, String maskedText) {}
                 @Override public void onSegmented(List<Segment> segments) {}
                 @Override public void onLabeled(List<LabeledSegment> labeledSegments) {}
-                @Override public void onRelationIntent(boolean fired, RelationIntentService.RelationIntentResult result) {}
+                @Override public void onSituationAnalysis(boolean fired, SituationAnalysisService.SituationAnalysisResult result) {}
                 @Override public void onRedacted(List<LabeledSegment> labeledSegments, int redCount) {}
                 @Override public void onTemplateSelected(StructureTemplate template, boolean gatingFired) {}
             };
@@ -79,7 +82,7 @@ public class MultiModelPipeline {
     private final RedactionService redactionService;
     private final GatingConditionEvaluator gatingEvaluator;
     private final IdentityLockBooster identityLockBooster;
-    private final RelationIntentService relationIntentService;
+    private final SituationAnalysisService situationAnalysisService;
     private final TemplateSelector templateSelector;
     private final ContextGatingService contextGatingService;
 
@@ -99,12 +102,12 @@ public class MultiModelPipeline {
             List<Segment> segments,
             List<LabeledSegment> labeledSegments,
             RedactionService.RedactionResult redaction,
-            RelationIntentService.RelationIntentResult relationIntent,
+            SituationAnalysisService.SituationAnalysisResult situationAnalysis,
             String summaryText,
             long totalAnalysisPromptTokens,
             long totalAnalysisCompletionTokens,
             boolean identityBoosterFired,
-            boolean relationIntentFired,
+            boolean situationAnalysisFired,
             boolean contextGatingFired,
             String chosenTemplateId,
             StructureTemplate chosenTemplate,
@@ -201,8 +204,17 @@ public class MultiModelPipeline {
         long totalPromptTokens = 0;
         long totalCompletionTokens = 0;
         boolean boosterFired = false;
-        boolean relationFired = false;
+        boolean situationFired = false;
         boolean contextGatingFired = false;
+
+        // Launch Situation Analysis async (runs in parallel with the rest of the pipeline)
+        boolean shouldFireSituation = gatingEvaluator.shouldFireSituationAnalysis(persona, masked);
+        CompletableFuture<SituationAnalysisService.SituationAnalysisResult> situationFuture = null;
+        if (shouldFireSituation) {
+            final String maskedForSituation = masked;
+            situationFuture = CompletableFuture.supplyAsync(() ->
+                    situationAnalysisService.analyze(persona, contexts, toneLevel, maskedForSituation, userPrompt, senderInfo));
+        }
 
         // E?) Identity Booster (gating — before segmentation so new spans are included)
         List<LockedSpan> allSpans = regexSpans;
@@ -236,19 +248,8 @@ public class MultiModelPipeline {
         }
         callback.onSegmented(segments);
 
-        // Pre-evaluate F? gating before starting D
-        boolean shouldFireRelation = gatingEvaluator.shouldFireRelationIntent(persona, normalized);
-
-        // D) Structure Label (LLM #1) + F?) Relation/Intent — run in parallel
+        // D) Structure Label (LLM #1)
         callback.onPhase("labeling");
-
-        // Launch F? async if gating condition met (runs in parallel with D)
-        CompletableFuture<RelationIntentService.RelationIntentResult> relationFuture = null;
-        if (shouldFireRelation) {
-            final String maskedForRelation = masked;
-            relationFuture = CompletableFuture.supplyAsync(() ->
-                    relationIntentService.analyze(persona, contexts, toneLevel, maskedForRelation, userPrompt, senderInfo));
-        }
 
         // D runs on main thread
         StructureLabelService.StructureLabelResult labelResult = structureLabelService.label(
@@ -297,31 +298,33 @@ public class MultiModelPipeline {
         }
         callback.onTemplateSelected(chosenTemplate, contextGatingFired);
 
-        // Collect F? result (already completed or near-completion from parallel execution)
-        RelationIntentService.RelationIntentResult relationResult = null;
-        if (shouldFireRelation) {
-            callback.onPhase("relation_analyzing");
-            try {
-                relationResult = relationFuture.join();
-            } catch (CompletionException e) {
-                Throwable cause = e.getCause();
-                if (cause instanceof AiTransformException ate) throw ate;
-                if (cause instanceof RuntimeException re) throw re;
-                throw new AiTransformException("관계/의도 분석 중 오류가 발생했습니다.", cause);
-            }
-            totalPromptTokens += relationResult.promptTokens();
-            totalCompletionTokens += relationResult.completionTokens();
-            relationFired = true;
-            callback.onRelationIntent(true, relationResult);
-        } else {
-            callback.onPhase("relation_skipped");
-            callback.onRelationIntent(false, null);
-        }
-
         // G) Redact (count tiers + build redactionMap — no processedText assembly)
         callback.onPhase("redacting");
         RedactionService.RedactionResult redaction = redactionService.process(enforcedLabels);
         callback.onRedacted(enforcedLabels, redaction.redCount());
+
+        // Collect Situation Analysis result (already completed or near-completion from parallel execution)
+        SituationAnalysisService.SituationAnalysisResult situationResult = null;
+        if (shouldFireSituation) {
+            callback.onPhase("situation_analyzing");
+            try {
+                situationResult = situationFuture.join();
+            } catch (CompletionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof AiTransformException ate) throw ate;
+                if (cause instanceof RuntimeException re) throw re;
+                throw new AiTransformException("상황 분석 중 오류가 발생했습니다.", cause);
+            }
+            // Filter RED-overlapping facts
+            situationResult = situationAnalysisService.filterRedFacts(situationResult, masked, enforcedLabels);
+            totalPromptTokens += situationResult.promptTokens();
+            totalCompletionTokens += situationResult.completionTokens();
+            situationFired = true;
+            callback.onSituationAnalysis(true, situationResult);
+        } else {
+            callback.onPhase("situation_skipped");
+            callback.onSituationAnalysis(false, null);
+        }
 
         // Count tiers
         int greenCount = (int) enforcedLabels.stream()
@@ -329,16 +332,16 @@ public class MultiModelPipeline {
         int yellowCount = redaction.yellowCount();
         int redCount = redaction.redCount();
 
-        log.info("[Pipeline] Analysis complete — segments={}, GREEN={}, YELLOW={}, RED={}, booster={}, relation={}, template={}, gating={}",
-                segments.size(), greenCount, yellowCount, redCount, boosterFired, relationFired,
+        log.info("[Pipeline] Analysis complete — segments={}, GREEN={}, YELLOW={}, RED={}, booster={}, situation={}, template={}, gating={}",
+                segments.size(), greenCount, yellowCount, redCount, boosterFired, situationFired,
                 chosenTemplate.id(), contextGatingFired);
 
         return new AnalysisPhaseResult(
                 masked, allSpans, segments, enforcedLabels,
                 redaction,
-                relationResult, labelResult.summaryText(),
+                situationResult, labelResult.summaryText(),
                 totalPromptTokens, totalCompletionTokens,
-                boosterFired, relationFired, contextGatingFired,
+                boosterFired, situationFired, contextGatingFired,
                 chosenTemplate.id(), chosenTemplate, effectiveSections,
                 greenCount, yellowCount, redCount
         );
@@ -379,7 +382,7 @@ public class MultiModelPipeline {
         String finalUser = multiPromptBuilder.buildFinalUserMessage(
                 persona, contexts, toneLevel, senderInfo,
                 orderedSegments,
-                analysis.lockedSpans(), analysis.relationIntent(), analysis.summaryText(),
+                analysis.lockedSpans(), analysis.situationAnalysis(), analysis.summaryText(),
                 analysis.chosenTemplate(), analysis.effectiveSections());
 
         return new FinalPromptPair(finalSystem, finalUser, analysis.lockedSpans(),
@@ -486,7 +489,7 @@ public class MultiModelPipeline {
                 analysis.lockedSpans().size(),
                 retryCount,
                 analysis.identityBoosterFired(),
-                analysis.relationIntentFired(),
+                analysis.situationAnalysisFired(),
                 analysis.contextGatingFired(),
                 analysis.chosenTemplateId(),
                 totalLatency

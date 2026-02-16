@@ -46,7 +46,7 @@ export default function QualityReportPanel({ stats }: Props) {
             <StatItem label="고정 표현" value={stats.lockedSpanCount} />
             <StatItem label="재시도" value={stats.retryCount} />
             <GatingItem label="고유명사 보호" fired={stats.identityBoosterFired} />
-            <GatingItem label="관계/의도 분석" fired={stats.relationIntentFired} />
+            <GatingItem label="상황 분석" fired={stats.situationAnalysisFired} />
           </div>
         </div>
       )}

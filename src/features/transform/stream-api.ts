@@ -27,10 +27,9 @@ export interface SegmentData {
   end: number;
 }
 
-export interface RelationIntentData {
-  relation: string;
+export interface SituationAnalysisData {
+  facts: { content: string; source: string }[];
   intent: string;
-  stance: string;
 }
 
 export interface ValidationIssueData {
@@ -70,7 +69,7 @@ export interface StatsData {
   lockedSpanCount: number;
   retryCount: number;
   identityBoosterFired: boolean;
-  relationIntentFired: boolean;
+  situationAnalysisFired: boolean;
   contextGatingFired: boolean;
   chosenTemplateId: string;
   latencyMs: number;
@@ -101,8 +100,8 @@ export type PipelinePhase =
   | 'template_selecting'
   | 'context_gating'
   | 'context_gating_skipped'
-  | 'relation_analyzing'
-  | 'relation_skipped'
+  | 'situation_analyzing'
+  | 'situation_skipped'
   | 'redacting'
   | 'generating'
   | 'validating'
@@ -118,7 +117,7 @@ export interface StreamCallbacks {
   onSpans?: (spans: LockedSpanInfo[]) => void;
   onSegments?: (segments: SegmentData[]) => void;
   onMaskedText?: (text: string) => void;
-  onRelationIntent?: (data: RelationIntentData) => void;
+  onSituationAnalysis?: (data: SituationAnalysisData) => void;
   onProcessedSegments?: (data: ProcessedSegmentsData) => void;
   onValidationIssues?: (issues: ValidationIssueData[]) => void;
   onTemplateSelected?: (data: TemplateSelectedData) => void;
@@ -260,9 +259,9 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
     case 'maskedText':
       callbacks.onMaskedText?.(data);
       break;
-    case 'relationIntent':
+    case 'situationAnalysis':
       try {
-        callbacks.onRelationIntent?.(JSON.parse(data));
+        callbacks.onSituationAnalysis?.(JSON.parse(data));
       } catch {
         // ignore parse error
       }

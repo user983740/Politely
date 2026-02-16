@@ -1,8 +1,8 @@
 package com.politeai.domain.transform.model;
 
 public record PipelineStats(
-        long structureLabelPromptTokens,
-        long structureLabelCompletionTokens,
+        long analysisPromptTokens,
+        long analysisCompletionTokens,
         long finalPromptTokens,
         long finalCompletionTokens,
         int segmentCount,
@@ -12,7 +12,7 @@ public record PipelineStats(
         int lockedSpanCount,
         int retryCount,
         boolean identityBoosterFired,
-        boolean relationIntentFired,
+        boolean situationAnalysisFired,
         boolean contextGatingFired,
         String chosenTemplateId,
         long totalLatencyMs

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type {
   LockedSpanInfo,
   SegmentData,
-  RelationIntentData,
+  SituationAnalysisData,
   ValidationIssueData,
   PipelinePhase,
   LabelData,
@@ -17,7 +17,7 @@ interface Props {
   segments: SegmentData[] | null;
   maskedText: string | null;
   labels: LabelData[] | null;
-  relationIntent: RelationIntentData | null;
+  situationAnalysis: SituationAnalysisData | null;
   processedSegments: ProcessedSegmentsData | null;
   validationIssues: ValidationIssueData[] | null;
   chosenTemplate: TemplateSelectedData | null;
@@ -115,11 +115,11 @@ const STEPS: StepDef[] = [
     isLlm: true,
   },
   {
-    id: 'relation',
-    label: '관계/의도 분석',
-    activeLabel: '분석 중',
-    runPhases: ['relation_analyzing'],
-    skipPhases: ['relation_skipped'],
+    id: 'situation',
+    label: '상황 분석',
+    activeLabel: '상황 분석 중',
+    runPhases: ['situation_analyzing'],
+    skipPhases: ['situation_skipped'],
     isLlm: true,
   },
   {
@@ -243,7 +243,7 @@ function StepContent({
   segments,
   maskedText,
   labels,
-  relationIntent,
+  situationAnalysis,
   processedSegments,
   validationIssues,
   chosenTemplate,
@@ -253,7 +253,7 @@ function StepContent({
   segments: SegmentData[] | null;
   maskedText: string | null;
   labels: LabelData[] | null;
-  relationIntent: RelationIntentData | null;
+  situationAnalysis: SituationAnalysisData | null;
   processedSegments: ProcessedSegmentsData | null;
   validationIssues: ValidationIssueData[] | null;
   chosenTemplate: TemplateSelectedData | null;
@@ -347,22 +347,32 @@ function StepContent({
         </div>
       );
 
-    case 'relation':
-      if (!relationIntent) return null;
+    case 'situation':
+      if (!situationAnalysis) return null;
       return (
-        <div className="space-y-0.5 text-[11px]">
-          <div className="flex gap-1.5">
-            <span className="shrink-0 font-medium text-text-secondary w-7">관계</span>
-            <span className="text-text">{relationIntent.relation}</span>
-          </div>
-          <div className="flex gap-1.5">
-            <span className="shrink-0 font-medium text-text-secondary w-7">의도</span>
-            <span className="text-text">{relationIntent.intent}</span>
-          </div>
-          <div className="flex gap-1.5">
-            <span className="shrink-0 font-medium text-text-secondary w-7">태도</span>
-            <span className="text-text">{relationIntent.stance}</span>
-          </div>
+        <div className="space-y-1.5 text-[11px]">
+          {situationAnalysis.facts.length > 0 && (
+            <div className="space-y-1">
+              <span className="font-medium text-text-secondary">사실</span>
+              {situationAnalysis.facts.map((fact, i) => (
+                <div key={i} className="flex items-start gap-1.5 ml-1">
+                  <span className="shrink-0 text-text-secondary/50 mt-0.5">-</span>
+                  <div>
+                    <span className="text-text">{fact.content}</span>
+                    {fact.source && (
+                      <span className="text-text-secondary/50 ml-1 italic">({fact.source})</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {situationAnalysis.intent && (
+            <div className="flex gap-1.5">
+              <span className="shrink-0 font-medium text-text-secondary">의도</span>
+              <span className="text-text">{situationAnalysis.intent}</span>
+            </div>
+          )}
         </div>
       );
 
@@ -431,7 +441,7 @@ export default function PipelineTracePanel({
   segments,
   maskedText,
   labels,
-  relationIntent,
+  situationAnalysis,
   processedSegments,
   validationIssues,
   chosenTemplate,
@@ -523,7 +533,7 @@ export default function PipelineTracePanel({
             (step.id === 'normalize' && maskedText) ||
             (step.id === 'label' && labels) ||
             (step.id === 'template_select' && chosenTemplate) ||
-            (step.id === 'relation' && relationIntent) ||
+            (step.id === 'situation' && situationAnalysis) ||
             (step.id === 'redact' && processedSegments && processedSegments.length > 0) ||
             (step.id === 'validate' && validationIssues !== null)
           );
@@ -617,7 +627,7 @@ export default function PipelineTracePanel({
                     segments={segments}
                     maskedText={maskedText}
                     labels={labels}
-                    relationIntent={relationIntent}
+                    situationAnalysis={situationAnalysis}
                     processedSegments={processedSegments}
                     validationIssues={validationIssues}
                     chosenTemplate={chosenTemplate}
