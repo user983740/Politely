@@ -44,28 +44,14 @@ Thumbs.db
 # Vite
 *.local
 
-# Backend (Spring Boot / Gradle)
-backend/.gradle/
-backend/build/
-backend/bin/
-backend/out/
-!backend/gradle/wrapper/gradle-wrapper.jar
-!backend/**/src/main/**/build/
-!backend/**/src/test/**/build/
-!backend/**/src/main/**/bin/
-!backend/**/src/test/**/bin/
-!backend/**/src/main/**/out/
-!backend/**/src/test/**/out/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+*.db
 
-# Spring Boot / IDE
-backend/.apt_generated
-backend/.classpath
-backend/.factorypath
-backend/.project
-backend/.settings/
-backend/.springBeans
-backend/.sts4-cache
-backend/*.iws
-backend/*.iml
-backend/*.ipr
-backend/HELP.md
+# Backend (FastAPI)
+# (no special ignores beyond Python defaults)
