@@ -4,16 +4,19 @@ on:
   push:
     branches: [main]
     paths:
-      - 'backend/**'
+      - 'app/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
   pull_request:
     branches: [main]
     paths:
-      - 'backend/**'
+      - 'app/**'
+      - 'pyproject.toml'
 
 env:
-  AWS_REGION: ap-northeast-2
+  ECR_REGION: ap-southeast-2
   ECR_REPOSITORY: polite-ai-backend
-  JAVA_VERSION: '21'
+  PYTHON_VERSION: '3.12'
 
 jobs:
   build:
@@ -21,25 +24,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
 
-      - name: Build & Test
-        working-directory: backend
-        run: ./gradlew build
+      - name: Lint
+        run: ruff check app/
 
-      - name: Upload JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-jar
-          path: backend/build/libs/*.jar
-          retention-days: 7
+      - name: Test
+        run: pytest app/tests/
 
   deploy:
     needs: build
@@ -47,22 +45,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: backend/Dockerfile
-          sparse-checkout-cone-mode: false
-
-      - name: Download JAR artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-jar
-          path: backend/build/libs
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.ECR_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -74,7 +63,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: backend
+          context: .
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
@@ -95,7 +84,7 @@ jobs:
             ENV_FILE="/home/${{ secrets.EC2_USERNAME }}/politeai/.env"
             mkdir -p "$(dirname "$ENV_FILE")"
 
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+            aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
             docker pull ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
             docker stop politeai-backend || true
             docker rm politeai-backend || true
