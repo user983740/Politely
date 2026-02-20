@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str = "sk-test-placeholder"
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "gpt-4o"
     openai_temperature: float = 0.85
     openai_max_tokens: int = 2000
     openai_max_tokens_paid: int = 4000
