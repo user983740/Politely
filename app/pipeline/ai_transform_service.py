@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _client: AsyncOpenAI | None = None
 
 
-class AiTransformException(Exception):
+class AiTransformError(Exception):
     pass
 
 
@@ -72,7 +72,7 @@ async def call_openai_with_model(
             content = completion.choices[0].message.content
 
         if not content:
-            raise AiTransformException("OpenAI 응답에 내용이 없습니다.")
+            raise AiTransformError("OpenAI 응답에 내용이 없습니다.")
 
         return LlmCallResult(
             content=content.strip(),
@@ -80,12 +80,12 @@ async def call_openai_with_model(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
-    except AiTransformException:
+    except AiTransformError:
         raise
     except Exception as e:
         logger.error("OpenAI API call failed [%s]", model, exc_info=True)
         error_msg = _classify_api_error(e)
-        raise AiTransformException(error_msg) from e
+        raise AiTransformError(error_msg) from e
 
 
 def _classify_api_error(e: Exception) -> str:

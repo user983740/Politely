@@ -55,3 +55,6 @@ venv/
 
 # Backend (FastAPI)
 # (no special ignores beyond Python defaults)
+
+# Legacy Java backend (reference only)
+backend/

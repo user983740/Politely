@@ -7,7 +7,7 @@ with dynamic template sections, AVOID_PHRASES, and micro-irregularity instructio
 import re
 from dataclasses import dataclass, field
 
-from app.models.domain import LabeledSegment, LockedSpan
+from app.models.domain import LockedSpan
 from app.models.enums import Persona, SituationContext, ToneLevel
 from app.pipeline import prompt_builder
 from app.pipeline.gating.situation_analysis_service import SituationAnalysisResult

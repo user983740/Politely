@@ -5,10 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import (
-    DuplicateEmailException,
-    InvalidVerificationCodeException,
-    VerificationExpiredException,
-    VerificationNotFoundException,
+    DuplicateEmailError,
+    InvalidVerificationCodeError,
+    VerificationExpiredError,
+    VerificationNotFoundError,
 )
 from app.db.repositories import (
     exists_user_by_email,
@@ -36,7 +36,7 @@ def _generate_code() -> str:
 
 async def send_verification_code(session: AsyncSession, email: str) -> None:
     if await exists_user_by_email(session, email):
-        raise DuplicateEmailException()
+        raise DuplicateEmailError()
 
     code = _generate_code()
     now = datetime.now(timezone.utc)
@@ -57,13 +57,13 @@ async def send_verification_code(session: AsyncSession, email: str) -> None:
 async def verify_code(session: AsyncSession, email: str, code: str) -> None:
     verification = await find_latest_verification_by_email(session, email)
     if verification is None:
-        raise VerificationNotFoundException()
+        raise VerificationNotFoundError()
 
     if verification.is_expired():
-        raise VerificationExpiredException()
+        raise VerificationExpiredError()
 
     if verification.code != code:
-        raise InvalidVerificationCodeException()
+        raise InvalidVerificationCodeError()
 
     verification.mark_verified()
     await session.commit()

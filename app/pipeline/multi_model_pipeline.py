@@ -29,12 +29,10 @@ from app.models.domain import (
     PipelineStats,
     Segment,
     ValidationIssue,
-    ValidationResult,
 )
 from app.models.enums import (
     Persona,
     Purpose,
-    SegmentLabel,
     SegmentLabelTier,
     SituationContext,
     ToneLevel,
@@ -325,10 +323,10 @@ async def execute_analysis(
         try:
             situation_result = await situation_task
         except Exception as e:
-            from app.pipeline.ai_transform_service import AiTransformException
-            if isinstance(e, AiTransformException):
+            from app.pipeline.ai_transform_service import AiTransformError
+            if isinstance(e, AiTransformError):
                 raise
-            raise AiTransformException("상황 분석 중 오류가 발생했습니다.") from e
+            raise AiTransformError("상황 분석 중 오류가 발생했습니다.") from e
 
         # Filter RED-overlapping facts
         situation_result = situation_analysis_service.filter_red_facts(

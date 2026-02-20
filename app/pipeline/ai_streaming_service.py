@@ -18,10 +18,9 @@ from app.core.config import settings
 from app.models.domain import LabeledSegment, LockedSpan, Segment
 from app.models.enums import Persona, Purpose, SegmentLabelTier, SituationContext, ToneLevel, Topic
 from app.pipeline import cache_metrics_tracker
-from app.pipeline.ai_transform_service import AiTransformException, call_openai_with_model
+from app.pipeline.ai_transform_service import AiTransformError, call_openai_with_model
 from app.pipeline.gating.situation_analysis_service import SituationAnalysisResult
 from app.pipeline.multi_model_pipeline import (
-    AnalysisPhaseResult,
     PipelineProgressCallback,
     build_final_prompt,
     execute_analysis,
@@ -242,10 +241,10 @@ async def stream_transform(
             # 8. Send done
             await push_event("done", active_result["unmasked_text"])
 
-        except AiTransformException as e:
+        except AiTransformError as e:
             logger.error("Streaming transform failed: %s", e)
             await push_event("error", str(e))
-        except Exception as e:
+        except Exception:
             logger.error("Streaming transform failed", exc_info=True)
             await push_event("error", "AI 변환 서비스에 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
         finally:

@@ -1,6 +1,6 @@
 from app.core.config import settings
 from app.models.domain import TransformResult
-from app.models.enums import Persona, Purpose, SituationContext, ToneLevel, Topic
+from app.models.enums import Persona, SituationContext, ToneLevel
 from app.pipeline.ai_transform_service import call_openai_with_model
 from app.pipeline.multi_model_pipeline import execute_analysis, execute_final
 
