@@ -51,7 +51,8 @@ SYSTEM_PROMPT = (
     "**관계 방향성**(이 내용이 관계를 개선/유지/악화하는가)의 3축으로 분석합니다.\n"
     "라벨 = 재작성 전략입니다. 라벨이 결정되면 서버/최종 모델이 라벨별 차등 재작성을 수행합니다.\n\n"
     "- **GREEN**: 메시지에 꼭 필요한 내용. 경어/문체만 다듬기\n"
-    "- **YELLOW**: 필요한 내용이지만, 내용 자체를 재구성하지 않으면 수신자가 불편할 내용 — 라벨별 차등 재작성 전략 적용\n"
+    "- **YELLOW**: 필요한 내용이지만, 내용 자체를 재구성하지 않으면 "
+    "수신자가 불편할 내용 — 라벨별 차등 재작성 전략 적용\n"
     "- **RED**: 내용 자체가 불필요하고 해로움 — 완전 삭제\n\n"
     "## 14개 라벨 체계\n\n"
     "### GREEN (보존) — 5개\n"
@@ -88,7 +89,8 @@ SYSTEM_PROMPT = (
     "**EMOTIONAL** (감정표현):\n"
     "업무/이슈에 대한 감정적 반응. \"너무 화가 난다\", \"답답하다\" 등 — 메시지 맥락을 형성하는 감정.\n"
     "→ 삭제 금지. 직접→간접 전환. 협조 의지 마무리.\n"
-    "⚠️ EMOTIONAL vs PRIVATE_TMI: 이슈/업무에 대한 감정 → EMOTIONAL. 발신자 개인 상태(직무 피로, 멘탈, 건강) → PRIVATE_TMI(RED)\n\n"
+    "⚠️ EMOTIONAL vs PRIVATE_TMI: 이슈/업무에 대한 감정 → EMOTIONAL. "
+    "발신자 개인 상태(직무 피로, 멘탈, 건강) → PRIVATE_TMI(RED)\n\n"
     "**EXCESS_DETAIL** (과잉설명):\n"
     "· 중복/반복: 핵심만 남기고 제거\n"
     "· 추측/가정: ⚠️ 별도 우선 처리. 반드시 가능성 표현 전환 + persona별 확인 표현 추가. 단순 중복 제거로 처리 금지.\n"
@@ -115,7 +117,8 @@ SYSTEM_PROMPT = (
     "⚠️ EXCESS_DETAIL과 PRIVATE_TMI를 혼동하지 마세요: 업무 관련 과잉 설명은 EXCESS_DETAIL(YELLOW), "
     "개인 사적 정보/건강/가정사는 PRIVATE_TMI(RED)\n\n"
     "### RED 강화 규칙\n"
-    "- **Rule 1 (공격 패턴):** 욕설/축약(ㅅㅂ,ㅄ,시x), 비꼬기(\"잘하시네요\"+ㅋㅋ), 능력 부정형, \"매번/맨날\" 행동 비난 → RED\n"
+    "- **Rule 1 (공격 패턴):** 욕설/축약(ㅅㅂ,ㅄ,시x), 비꼬기(\"잘하시네요\"+ㅋㅋ), "
+    "능력 부정형, \"매번/맨날\" 행동 비난 → RED\n"
     "- **Rule 2 (조롱 자동):** 반어적 칭찬 → 사실 포함 불문 RED\n"
     "- **Rule 3 (무정보 공격):** 사실 전혀 없이 비난/불만만 → RED\n\n"
     "## 분리 기준\n\n"
@@ -138,7 +141,8 @@ SYSTEM_PROMPT = (
     "- 상대 행동/능력을 직접 판단·평가 (\"항상 이러시잖아요\", \"좀 신경 써주시면\")\n"
     "- 비난 어조 + 일반화/반복 패턴 (\"맨날/항상/매번 이런다\", \"왜 이래요\", \"당신이 안 해서\")\n"
     "  ※ 증거/로그/시간을 동반한 정상적 RCA 보고(\"귀사 설정 변경 후 오류로 확인됩니다\")는 하드 아님\n"
-    "- 감정 직접 폭발 (\"답답하다\", \"화가 난다\", \"짜증난다\") ※ 개인 상태 토로(\"멘탈 나간다\",\"지쳐간다\")는 PRIVATE_TMI(RED)\n"
+    "- 감정 직접 폭발 (\"답답하다\", \"화가 난다\", \"짜증난다\") "
+    "※ 개인 상태 토로(\"멘탈 나간다\",\"지쳐간다\")는 PRIVATE_TMI(RED)\n"
     "- 방어적 변명 구조 (\"제 잘못도 있지만\", \"그건 제가 아니라\")\n\n"
     "◆ 소프트 트리거 (2개 이상 → YELLOW):\n"
     "- 원인의 외부 귀책 + 상대 과실/책임 지목이 결합 (\"~때문에\" 단독은 미해당)\n"
@@ -193,14 +197,17 @@ SYSTEM_PROMPT = (
     "T5|PURE_GRUMBLE\n"
     "T6|APOLOGY\n\n"
     "[판단 근거]\n"
-    "T2: 하드 트리거 — \"제 잘못도 있지만\"은 방어적 변명 구조 → SELF_JUSTIFICATION (강: 방어 프레임 삭제, 원인 사실만 추출)\n"
-    "T3: RED 자문 — (1)삭제해도 이해됨 YES (2)유용한 업무 사실 NO (3)가정사/사적 정보 YES → PRIVATE_TMI (RED). 이사 준비는 업무와 무관한 개인 사정\n"
+    "T2: 하드 트리거 — \"제 잘못도 있지만\"은 방어적 변명 구조 "
+    "→ SELF_JUSTIFICATION (강: 방어 프레임 삭제, 원인 사실만 추출)\n"
+    "T3: RED 자문 — (1)삭제해도 이해됨 YES (2)유용한 업무 사실 NO "
+    "(3)가정사/사적 정보 YES → PRIVATE_TMI (RED). 이사 준비는 업무와 무관한 개인 사정\n"
     "T5: 삭제해도 이해됨 + 예의 아님 → 3단계. 구체적 사실 없이 불만만 → PURE_GRUMBLE (RED)\n\n"
     "## 예시 2\n\n"
     "받는 사람: 고객\n\n"
     "[세그먼트]\n"
     "T1: 고객님\n"
-    "T2: 솔직히 말씀드리면 이번 오류는 저희 쪽 문제라기보단 귀사 서버 설정이 이상해서 생긴거고 제가 지난번에도 config.yaml 건드리지 말라고 했는데\n"
+    "T2: 솔직히 말씀드리면 이번 오류는 저희 쪽 문제라기보단 귀사 서버 설정이 이상해서 "
+    "생긴거고 제가 지난번에도 config.yaml 건드리지 말라고 했는데\n"
     "T3: 또 수정하셔서 이 사단이 난거 같습니다\n"
     "T4: 아무튼 현재 연락처로 연락주셔도 되고 로그파일 보내주시면 제가 보겠습니다\n"
     "T5: 근데 저도 사람이라 하루종일 이런 대응하면 멘탈 좀 나가긴 합니다\n\n"
@@ -211,9 +218,13 @@ SYSTEM_PROMPT = (
     "T4|CORE_INTENT\n"
     "T5|PRIVATE_TMI\n\n"
     "[판단 근거]\n"
-    "T2: 하드 트리거 — \"이상해서\", \"말했는데\" 비난 어조. 사실(서버 설정, config.yaml) 포함이지만 비난 두드러짐 → ACCOUNTABILITY (강: 비난 제거, 사실만 보존)\n"
+    "T2: 하드 트리거 — \"이상해서\", \"말했는데\" 비난 어조. "
+    "사실(서버 설정, config.yaml) 포함이지만 비난 두드러짐 "
+    "→ ACCOUNTABILITY (강: 비난 제거, 사실만 보존)\n"
     "T3: 하드 트리거 — \"또 수정하셔서\"는 상대 행동을 직접 판단 → NEGATIVE_FEEDBACK\n"
-    "T5: RED 자문 — (1)삭제해도 이해됨 YES (2)유용한 업무 사실 NO (3)발신자 개인 상태(멘탈/직무 피로) YES → PRIVATE_TMI (RED). 고객에게 불필요한 개인 사정\n\n"
+    "T5: RED 자문 — (1)삭제해도 이해됨 YES (2)유용한 업무 사실 NO "
+    "(3)발신자 개인 상태(멘탈/직무 피로) YES → PRIVATE_TMI (RED). "
+    "고객에게 불필요한 개인 사정\n\n"
     "## 예시 3\n\n"
     "받는 사람: 학부모\n\n"
     "[세그먼트]\n"
@@ -244,7 +255,8 @@ SYSTEM_PROMPT = (
     "## 필수 규칙\n"
     "- **모든 세그먼트에 반드시 라벨을 부여하세요.** 빠뜨리는 세그먼트가 없어야 합니다.\n"
     "- **RED는 극도로 보수적으로.** 단, RED 강화 규칙에 해당하면 적용.\n"
-    "- **GREEN vs YELLOW 핵심**: 하드 트리거 1개+ 또는 소프트 트리거 2개+ → YELLOW. 표면 형태에 속지 말고 실제 기능으로 판단.\n"
+    "- **GREEN vs YELLOW 핵심**: 하드 트리거 1개+ 또는 소프트 트리거 2개+ → YELLOW. "
+    "표면 형태에 속지 말고 실제 기능으로 판단.\n"
     "- **수신자 관점 필수 체크**: persona의 입장에서, 관계 경계 침범 여부 확인.\n"
     "- **YELLOW 라벨 선택**: 5개 YELLOW 라벨 중 재작성 전략이 가장 적합한 것 선택.\n"
     "- RED 전 반드시 자문: \"이걸 통째로 삭제하면 메시지가 여전히 이해되는가?\"\n\n"
@@ -292,9 +304,13 @@ async def label(
             user_message
             + "\n\n[시스템 경고] 이전 응답에서 다음 세그먼트의 라벨이 누락되었습니다: "
             + ", ".join(missing_ids)
-            + ". 모든 세그먼트에 라벨을 부여해주세요. 반드시 SEG_ID|LABEL 형식으로 줄마다 출력하세요. 코드블록이나 설명 없이 바로 출력하세요."
+            + ". 모든 세그먼트에 라벨을 부여해주세요. "
+            "반드시 SEG_ID|LABEL 형식으로 줄마다 출력하세요. "
+            "코드블록이나 설명 없이 바로 출력하세요."
         )
-        retry_result: LlmCallResult = await ai_call_fn(MODEL, SYSTEM_PROMPT, retry_message, TEMPERATURE, MAX_TOKENS, None)
+        retry_result: LlmCallResult = await ai_call_fn(
+            MODEL, SYSTEM_PROMPT, retry_message, TEMPERATURE, MAX_TOKENS, None,
+        )
 
         logger.debug("[StructureLabel] Retry raw LLM response:\n%s", retry_result.content)
 
@@ -308,7 +324,10 @@ async def label(
             return StructureLabelResult(retry_labeled, retry_summary, total_prompt, total_completion)
 
         # Both attempts failed — fallback: label all as COURTESY
-        logger.warning("[StructureLabel] Both attempts failed, falling back to all-COURTESY labels for %d segments", len(segments))
+        logger.warning(
+            "[StructureLabel] Both attempts failed, falling back to all-COURTESY labels for %d segments",
+            len(segments),
+        )
         fallback = [
             LabeledSegment(seg.id, SegmentLabel.COURTESY, seg.text, seg.start, seg.end)
             for seg in segments
@@ -329,7 +348,9 @@ async def label(
             "확인 항목: (1) 상대 행동/능력 판단, (2) 비난 어조+일반화, (3) 감정 직접 폭발, "
             "(4) 방어적 변명 구조, (5) 외부 귀책+불만 결합, (6) 추측, (7) 동일 내용 반복"
         )
-        diversity_result: LlmCallResult = await ai_call_fn(MODEL, SYSTEM_PROMPT, diversity_message, TEMPERATURE, MAX_TOKENS, None)
+        diversity_result: LlmCallResult = await ai_call_fn(
+            MODEL, SYSTEM_PROMPT, diversity_message, TEMPERATURE, MAX_TOKENS, None,
+        )
 
         logger.debug("[StructureLabel] Diversity retry response:\n%s", diversity_result.content)
 

@@ -293,12 +293,18 @@ def _apply_split_pattern_with_connective_filter(
                 sub = unit.text[prev_end:sp_start].strip()
                 if sub:
                     sub_start = unit.start + _find_substring_start(unit.text, prev_end, sub)
-                    result.append(_SplitUnit(sub, sub_start, sub_start + len(sub), min(unit.confidence, stage_confidence)))
+                    result.append(_SplitUnit(
+                        sub, sub_start, sub_start + len(sub),
+                        min(unit.confidence, stage_confidence),
+                    ))
                 prev_end = sp_end
             tail = unit.text[prev_end:].strip()
             if tail:
                 tail_start = unit.start + _find_substring_start(unit.text, prev_end, tail)
-                result.append(_SplitUnit(tail, tail_start, tail_start + len(tail), min(unit.confidence, stage_confidence)))
+                result.append(_SplitUnit(
+                    tail, tail_start, tail_start + len(tail),
+                    min(unit.confidence, stage_confidence),
+                ))
 
     return result
 
@@ -635,7 +641,10 @@ def _apply_split_pattern(
             tail = unit.text[last_end:].strip()
             if tail:
                 tail_start = unit.start + _find_substring_start(unit.text, last_end, tail)
-                result.append(_SplitUnit(tail, tail_start, tail_start + len(tail), min(unit.confidence, stage_confidence)))
+                result.append(_SplitUnit(
+                    tail, tail_start, tail_start + len(tail),
+                    min(unit.confidence, stage_confidence),
+                ))
         else:
             result.append(unit)
 

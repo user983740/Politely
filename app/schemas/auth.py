@@ -13,14 +13,20 @@ class VerifyCodeRequest(BaseModel):
 
 
 class CheckLoginIdRequest(BaseModel):
-    login_id: str = Field(..., alias="loginId", min_length=3, max_length=30, description="아이디는 3자 이상 30자 이하로 입력해주세요")
+    login_id: str = Field(
+        ..., alias="loginId", min_length=3, max_length=30,
+        description="아이디는 3자 이상 30자 이하로 입력해주세요",
+    )
 
     model_config = {"populate_by_name": True}
 
 
 class SignupRequest(BaseModel):
     email: EmailStr = Field(..., description="이메일을 입력해주세요")
-    login_id: str = Field(..., alias="loginId", min_length=3, max_length=30, description="아이디는 3자 이상 30자 이하로 입력해주세요")
+    login_id: str = Field(
+        ..., alias="loginId", min_length=3, max_length=30,
+        description="아이디는 3자 이상 30자 이하로 입력해주세요",
+    )
     name: str = Field(..., max_length=50, description="이름은 50자 이하로 입력해주세요")
     password: str = Field(..., description="비밀번호를 입력해주세요")
     privacy_agreed: bool = Field(..., alias="privacyAgreed")

@@ -87,7 +87,11 @@ async def refine(
             "[SegmentRefiner] %d -> %d segments (LLM split %d long segments)",
             len(segments), len(refined), len(long_indices),
         )
-        return RefineResult(segments=refined, prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens)
+        return RefineResult(
+            segments=refined,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+        )
 
     except Exception as e:
         logger.warning("[SegmentRefiner] LLM call failed, keeping original segments: %s", e)

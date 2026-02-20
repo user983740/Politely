@@ -16,15 +16,25 @@ _PATTERNS: list[tuple[re.Pattern, LockedSpanType]] = [
     # 4. Account number
     (re.compile(r"\d{2,6}-\d{2,6}-\d{4,12}"), LockedSpanType.ACCOUNT),
     # 5. Korean date
-    (re.compile(r"(?:\d{2,4}년\s*)?\d{1,2}월\s*\d{1,2}일|\d{2,4}년\s*\d{1,2}월|\d{4}[./\-]\d{1,2}[./\-]\d{1,2}"), LockedSpanType.DATE),
+    (re.compile(
+        r"(?:\d{2,4}년\s*)?\d{1,2}월\s*\d{1,2}일"
+        r"|\d{2,4}년\s*\d{1,2}월"
+        r"|\d{4}[./\-]\d{1,2}[./\-]\d{1,2}"
+    ), LockedSpanType.DATE),
     # 6. Korean time
-    (re.compile(r"(?:오전|오후|새벽|저녁|밤)?\s*\d{1,2}(?:시\s*\d{1,2}분?)?(?:\s*~\s*\d{1,2}(?:시(?:\s*\d{1,2}분?)?)?)?(?:시|분)"), LockedSpanType.TIME),
+    (re.compile(
+        r"(?:오전|오후|새벽|저녁|밤)?\s*\d{1,2}(?:시\s*\d{1,2}분?)?"
+        r"(?:\s*~\s*\d{1,2}(?:시(?:\s*\d{1,2}분?)?)?)?(?:시|분)"
+    ), LockedSpanType.TIME),
     # 7. HH:MM
     (re.compile(r"(?:[01]?\d|2[0-3]):\d{2}"), LockedSpanType.TIME_HH_MM),
     # 8. Money
     (re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:만\s*)?원"), LockedSpanType.MONEY),
     # 9. Numbers with units
-    (re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:자리|개|건|명|장|통|호|층|평|kg|cm|mm|km|%|주|일|개월|년|시간|분|초)"), LockedSpanType.UNIT_NUMBER),
+    (re.compile(
+        r"\d[\d,]*(?:\.\d+)?\s*"
+        r"(?:자리|개|건|명|장|통|호|층|평|kg|cm|mm|km|%|주|일|개월|년|시간|분|초)"
+    ), LockedSpanType.UNIT_NUMBER),
     # 10. Large standalone numbers
     (re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{5,}"), LockedSpanType.LARGE_NUMBER),
     # 11. UUID
@@ -39,9 +49,17 @@ _PATTERNS: list[tuple[re.Pattern, LockedSpanType]] = [
     # 14. Version numbers
     (re.compile(r"v?\d{1,4}\.\d{1,4}(?:\.\d{1,4})?"), LockedSpanType.VERSION),
     # 15. Quoted text (2-60 chars inside matched quotes)
-    (re.compile(r'"([^"]{2,60})"|\'([^\']{2,60})\'|\u201C([^\u201C\u201D]{2,60})\u201D|\u2018([^\u2018\u2019]{2,60})\u2019'), LockedSpanType.QUOTED_TEXT),
+    (re.compile(
+        r'"([^"]{2,60})"|\'([^\']{2,60})\''
+        r'|\u201C([^\u201C\u201D]{2,60})\u201D'
+        r'|\u2018([^\u2018\u2019]{2,60})\u2019'
+    ), LockedSpanType.QUOTED_TEXT),
     # 16. Identifiers: camelCase (>=5 chars), snake_case (2+ segments), PascalCase with fn()
-    (re.compile(r"\b(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]{2,}|[a-z]+(?:_[a-z]+){1,}|[A-Z][a-z]+(?:[A-Z][a-z]+)+)(?:\(\))?\b"), LockedSpanType.IDENTIFIER),
+    (re.compile(
+        r"\b(?:[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]{2,}"
+        r"|[a-z]+(?:_[a-z]+){1,}"
+        r"|[A-Z][a-z]+(?:[A-Z][a-z]+)+)(?:\(\))?\b"
+    ), LockedSpanType.IDENTIFIER),
     # 17. Git commit hashes (7-40 hex chars)
     (re.compile(r"\b[0-9a-f]{7,40}\b"), LockedSpanType.HASH_COMMIT),
 ]

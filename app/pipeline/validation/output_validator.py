@@ -324,7 +324,10 @@ def _check_length_overexpansion(output: str, original_text: str, issues: list[Va
         issues.append(ValidationIssue(
             type=ValidationIssueType.LENGTH_OVEREXPANSION,
             severity=Severity.WARNING,
-            message=f"출력 길이 과확장: 입력 {len(original_text)}자 → 출력 {len(output)}자 ({len(output) / len(original_text):.1f}배)",
+            message=(
+                f"출력 길이 과확장: 입력 {len(original_text)}자 → 출력 {len(output)}자"
+                f" ({len(output) / len(original_text):.1f}배)"
+            ),
         ))
 
     if len(output) > _MAX_ABSOLUTE_OUTPUT_LENGTH:
@@ -411,7 +414,11 @@ def _check_redacted_reentry(
                     issues.append(ValidationIssue(
                         type=ValidationIssueType.REDACTED_REENTRY,
                         severity=Severity.WARNING,
-                        message=f'제거된 내용 의미적 재유입 의심: "{original_text[:30]}..." (키워드 {match_count}개 일치)',
+                        message=(
+                            f'제거된 내용 의미적 재유입 의심: '
+                            f'"{original_text[:30]}..." '
+                            f'(키워드 {match_count}개 일치)'
+                        ),
                         matched_text=marker,
                     ))
 
