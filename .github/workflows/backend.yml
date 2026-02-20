@@ -14,7 +14,7 @@ on:
       - 'pyproject.toml'
 
 env:
-  ECR_REGION: ap-southeast-2
+  ECR_REGION: ap-northeast-2
   ECR_REPOSITORY: polite-ai-backend
   PYTHON_VERSION: '3.12'
 
@@ -84,7 +84,7 @@ jobs:
             ENV_FILE="/home/${{ secrets.EC2_USERNAME }}/politeai/.env"
             mkdir -p "$(dirname "$ENV_FILE")"
 
-            aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+            aws ecr get-login-password --region ${{ env.ECR_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
             docker pull ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
             docker stop politeai-backend || true
             docker rm politeai-backend || true
