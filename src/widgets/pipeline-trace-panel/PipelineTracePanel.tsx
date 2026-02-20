@@ -465,13 +465,7 @@ export default function PipelineTracePanel({
     }
     setSkippedSteps(newSkipped);
 
-    // Auto-expand completed steps
-    const statuses = getStepStatuses(currentPhase, newSkipped, false);
-    const completedWithData = new Set<string>();
-    statuses.forEach((status, stepId) => {
-      if (status === 'completed') completedWithData.add(stepId);
-    });
-    setExpandedSteps(completedWithData);
+    // Keep steps collapsed by default (user can expand on click)
   }
 
   // After complete, show all expandable

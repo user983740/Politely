@@ -10,7 +10,7 @@ import {CostPanel} from '@/widgets/cost-panel';
 import {QualityReportPanel} from '@/widgets/quality-report-panel';
 import {PipelineTracePanel} from '@/widgets/pipeline-trace-panel';
 import {streamTransform} from '@/features/transform/stream-api';
-import type {LockedSpanInfo} from '@/features/transform/stream-api';
+import type {LockedSpanInfo, SegmentData, LabelData, SituationAnalysisData, ProcessedSegmentsData, ValidationIssueData, PipelinePhase, TemplateSelectedData, StatsData, UsageInfo} from '@/features/transform/stream-api';
 import {ApiError} from '@/shared/api/client';
 
 const TONE_SLIDER_LEVELS: {key: ToneLevel; label: string}[] = [
@@ -69,6 +69,93 @@ const PERSONA_ICONS: Record<string, React.ReactNode> = {
     </svg>
   ),
 };
+
+function DetailSection({
+  currentPhase,
+  isTransforming,
+  spans,
+  segments,
+  maskedText,
+  labels,
+  situationAnalysis,
+  processedSegments,
+  validationIssues,
+  chosenTemplate,
+  transformedText,
+  transformError,
+  pipelineStats,
+  usageInfo,
+}: {
+  currentPhase: PipelinePhase | null;
+  isTransforming: boolean;
+  spans: LockedSpanInfo[] | null;
+  segments: SegmentData[] | null;
+  maskedText: string | null;
+  labels: LabelData[] | null;
+  situationAnalysis: SituationAnalysisData | null;
+  processedSegments: ProcessedSegmentsData | null;
+  validationIssues: ValidationIssueData[] | null;
+  chosenTemplate: TemplateSelectedData | null;
+  transformedText: string;
+  transformError: string | null;
+  pipelineStats: StatsData | null;
+  usageInfo: UsageInfo | null;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="border border-border/60 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-surface border-b border-border/60 cursor-pointer hover:bg-surface/80 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-text">상세 정보</h3>
+          {pipelineStats && (
+            <span className="text-xs text-text-secondary tabular-nums">
+              {pipelineStats.segmentCount}개 세그먼트 · {(pipelineStats.latencyMs / 1000).toFixed(1)}s
+            </span>
+          )}
+        </div>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={`text-text-secondary transition-transform ${open ? 'rotate-180' : ''}`}
+          aria-hidden="true"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="p-4 space-y-4">
+          <PipelineTracePanel
+            currentPhase={currentPhase}
+            isTransforming={isTransforming}
+            spans={spans}
+            segments={segments}
+            maskedText={maskedText}
+            labels={labels}
+            situationAnalysis={situationAnalysis}
+            processedSegments={processedSegments}
+            validationIssues={validationIssues}
+            chosenTemplate={chosenTemplate}
+            transformedText={transformedText}
+            transformError={transformError}
+          />
+          {pipelineStats && <QualityReportPanel stats={pipelineStats} />}
+          {usageInfo && <CostPanel usageInfo={usageInfo} />}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function HomePage() {
   const {isLoggedIn, loginId, name, setLoggedOut} = useAuthStore();
@@ -485,24 +572,28 @@ export default function HomePage() {
         {/* Result content centered */}
         <section className="flex-1 overflow-y-auto px-4 sm:px-8 lg:px-10 py-6 sm:py-10">
           <article className="mx-auto max-w-2xl space-y-4">
-            <PipelineTracePanel
-              currentPhase={currentPhase}
-              isTransforming={isTransforming}
-              spans={spansRef.current.length > 0 ? spansRef.current : null}
-              segments={segments}
-              maskedText={maskedText}
-              labels={labels}
-              situationAnalysis={situationAnalysis}
-              processedSegments={processedSegments}
-              validationIssues={validationIssues}
-              chosenTemplate={chosenTemplate}
-              transformedText={transformedText}
-              transformError={transformError}
-            />
             <ResultPanel />
             <AnalysisPanel labels={labels} />
-            {pipelineStats && <QualityReportPanel stats={pipelineStats} />}
-            {usageInfo && <CostPanel usageInfo={usageInfo} />}
+
+            {/* Developer details (collapsible) */}
+            {(pipelineStats || usageInfo || currentPhase) && (
+              <DetailSection
+                currentPhase={currentPhase}
+                isTransforming={isTransforming}
+                spans={spansRef.current.length > 0 ? spansRef.current : null}
+                segments={segments}
+                maskedText={maskedText}
+                labels={labels}
+                situationAnalysis={situationAnalysis}
+                processedSegments={processedSegments}
+                validationIssues={validationIssues}
+                chosenTemplate={chosenTemplate}
+                transformedText={transformedText}
+                transformError={transformError}
+                pipelineStats={pipelineStats}
+                usageInfo={usageInfo}
+              />
+            )}
 
             {/* Selection summary chips */}
             <footer className="pt-5 border-t border-border/60">

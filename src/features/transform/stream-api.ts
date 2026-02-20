@@ -171,15 +171,17 @@ async function streamSSE(
 
       buffer += decoder.decode(value, { stream: true });
 
-      // Parse SSE events from buffer
-      const lines = buffer.split('\n');
+      // Parse SSE events from buffer (split on \r\n or \n to handle CRLF from sse-starlette)
+      const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? ''; // Keep incomplete line in buffer
 
       for (const line of lines) {
         if (line.startsWith('event:')) {
           currentEvent = line.slice(6).trim();
         } else if (line.startsWith('data:')) {
-          currentDataLines.push(line.slice(5));
+          // SSE spec: strip one leading space after "data:" if present
+          const value = line.slice(5);
+          currentDataLines.push(value.startsWith(' ') ? value.slice(1) : value);
         } else if (line === '' && currentEvent) {
           // Empty line = end of event
           dispatchEvent(currentEvent, currentDataLines.join('\n'), callbacks);
@@ -193,12 +195,13 @@ async function streamSSE(
     if (currentEvent && currentDataLines.length > 0) {
       dispatchEvent(currentEvent, currentDataLines.join('\n'), callbacks);
     } else if (buffer.trim()) {
-      const remaining = buffer.split('\n');
+      const remaining = buffer.split(/\r?\n/);
       for (const line of remaining) {
         if (line.startsWith('event:')) {
           currentEvent = line.slice(6).trim();
         } else if (line.startsWith('data:')) {
-          currentDataLines.push(line.slice(5));
+          const value = line.slice(5);
+          currentDataLines.push(value.startsWith(' ') ? value.slice(1) : value);
         }
       }
       if (currentEvent && currentDataLines.length > 0) {
