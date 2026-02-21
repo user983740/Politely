@@ -110,11 +110,11 @@ async def stream_transform(
             ]
             await push_event("processedSegments", seg_data)
 
-        async def on_template_selected(self, template: StructureTemplate, gating_fired: bool) -> None:
+        async def on_template_selected(self, template: StructureTemplate, metadata_overridden: bool) -> None:
             await push_event("templateSelected", {
                 "templateId": template.id,
                 "templateName": template.name,
-                "contextGatingFired": gating_fired,
+                "metadataOverridden": metadata_overridden,
             })
 
     async def run_pipeline() -> None:
@@ -210,7 +210,7 @@ async def stream_transform(
                 "retryCount": retry_count,
                 "identityBoosterFired": analysis.identity_booster_fired,
                 "situationAnalysisFired": analysis.situation_analysis_fired,
-                "contextGatingFired": analysis.context_gating_fired,
+                "metadataOverridden": analysis.metadata_overridden,
                 "chosenTemplateId": analysis.chosen_template_id,
                 "latencyMs": total_latency,
             })

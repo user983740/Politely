@@ -1,18 +1,18 @@
 """Multi-model pipeline orchestrator (v2).
 
 Pipeline:
-  [parallel: SituationAnalysis (LLM) + A→G pipeline]
+  [parallel: SituationAnalysis+MetadataCheck (LLM) + A→G pipeline]
   A) normalize → B) extract+mask (enhanced regex)
   → E?) identityBooster (gating)
   → C) segment (server) → C') refine long segments (LLM, conditional)
   → D) structureLabel (LLM #1) → D') RED enforce
-  → Template Select → Context Gating LLM (optional)
+  → join SituationAnalysis → filterRedFacts → metadata override
+  → Template Select (with corrected metadata)
   → G) redact (server)
-  → join SituationAnalysis → filterRedFacts
   → H) Final LLM #2 → I) unmask → validate → (ERROR: 1 retry)
 
 Base case: 3 LLM calls (SituationAnalysis + StructureLabel + Final, +1 if long segments).
-With gating: up to 6.
+With gating: up to 5.
 """
 
 import asyncio
@@ -75,7 +75,7 @@ class PipelineProgressCallback:
     async def on_redacted(self, labeled_segments: list[LabeledSegment], red_count: int) -> None:
         pass
 
-    async def on_template_selected(self, template: StructureTemplate, gating_fired: bool) -> None:
+    async def on_template_selected(self, template: StructureTemplate, metadata_overridden: bool) -> None:
         pass
 
 
@@ -95,7 +95,7 @@ class AnalysisPhaseResult:
     total_analysis_completion_tokens: int
     identity_booster_fired: bool
     situation_analysis_fired: bool
-    context_gating_fired: bool
+    metadata_overridden: bool
     chosen_template_id: str
     chosen_template: StructureTemplate
     effective_sections: list[StructureSection]
@@ -168,14 +168,13 @@ async def execute_analysis(
     ai_call_fn=None,
     callback: PipelineProgressCallback | None = None,
 ) -> AnalysisPhaseResult:
-    """Run the analysis phase: preprocess → segment → label → template → gating → redact.
+    """Run the analysis phase: preprocess → segment → label → SA → metadata override → template → redact.
 
     Args:
         ai_call_fn: async function(model, system, user, temp, max_tokens, analysis_context) -> LlmCallResult
         callback: progress callback for SSE streaming
     """
     from app.pipeline.gating import (
-        context_gating_service,
         gating_condition_evaluator,
         identity_lock_booster,
         situation_analysis_service,
@@ -214,7 +213,7 @@ async def execute_analysis(
     total_completion_tokens = 0
     booster_fired = False
     situation_fired = False
-    context_gating_fired = False
+    metadata_overridden = False
 
     # Launch Situation Analysis async (runs in parallel with the rest)
     should_fire_situation = gating_condition_evaluator.should_fire_situation_analysis(persona, masked)
@@ -223,6 +222,7 @@ async def execute_analysis(
         situation_task = asyncio.create_task(
             situation_analysis_service.analyze(
                 persona, contexts, tone_level, masked, user_prompt, sender_info, ai_call_fn,
+                topic=topic, purpose=purpose,
             )
         )
 
@@ -271,52 +271,7 @@ async def execute_analysis(
     enforced_labels = red_label_enforcer.enforce(label_result.labeled_segments)
     await callback.on_labeled(enforced_labels)
 
-    # Template Selection
-    await callback.on_phase("template_selecting")
-    label_stats = LabelStats.from_segments(enforced_labels)
-    template_result = template_selector.select_template(
-        registry, persona, contexts, topic, purpose, label_stats, masked,
-    )
-    chosen_template = template_result.template
-    effective_sections = template_result.effective_sections
-
-    # Context Gating (optional LLM)
-    if gating_condition_evaluator.should_fire_context_gating(
-        persona, contexts, topic, purpose, tone_level, label_stats, masked,
-    ):
-        await callback.on_phase("context_gating")
-        gating_result = await context_gating_service.evaluate(
-            persona, contexts, topic, purpose, tone_level, masked, enforced_labels, ai_call_fn,
-        )
-        total_prompt_tokens += gating_result.prompt_tokens
-        total_completion_tokens += gating_result.completion_tokens
-        context_gating_fired = True
-
-        if gating_result.meets_threshold():
-            effective_topic = gating_result.inferred_topic if gating_result.inferred_topic else topic
-            effective_purpose = gating_result.inferred_purpose if gating_result.inferred_purpose else purpose
-            effective_contexts = (
-                [gating_result.inferred_primary_context] if gating_result.inferred_primary_context else contexts
-            )
-            overridden = template_selector.select_template(
-                registry, persona, effective_contexts, effective_topic, effective_purpose, label_stats, masked,
-            )
-            logger.info(
-                "[Pipeline] Context gating overrode template: %s → %s (confidence=%s)",
-                chosen_template.id, overridden.template.id, gating_result.confidence,
-            )
-            chosen_template = overridden.template
-            effective_sections = overridden.effective_sections
-    else:
-        await callback.on_phase("context_gating_skipped")
-    await callback.on_template_selected(chosen_template, context_gating_fired)
-
-    # G) Redact
-    await callback.on_phase("redacting")
-    redaction = redaction_service.process(enforced_labels)
-    await callback.on_redacted(enforced_labels, redaction.red_count)
-
-    # Collect Situation Analysis result
+    # Collect Situation Analysis result (before template selection for metadata override)
     situation_result: SituationAnalysisResult | None = None
     if should_fire_situation and situation_task is not None:
         await callback.on_phase("situation_analyzing")
@@ -340,6 +295,43 @@ async def execute_analysis(
         await callback.on_phase("situation_skipped")
         await callback.on_situation_analysis(False, None)
 
+    # Apply metadata override from SA if threshold met
+    effective_topic = topic
+    effective_purpose = purpose
+    effective_contexts = contexts
+    if (
+        situation_result is not None
+        and situation_result.metadata_check is not None
+        and situation_result.metadata_check.meets_threshold()
+    ):
+        mc = situation_result.metadata_check
+        if mc.inferred_topic:
+            effective_topic = mc.inferred_topic
+        if mc.inferred_purpose:
+            effective_purpose = mc.inferred_purpose
+        if mc.inferred_primary_context:
+            effective_contexts = [mc.inferred_primary_context]
+        metadata_overridden = True
+        logger.info(
+            "[Pipeline] SA metadata override: topic=%s, purpose=%s, context=%s (confidence=%.2f)",
+            effective_topic, effective_purpose, effective_contexts, mc.confidence,
+        )
+
+    # Template Selection (using potentially corrected metadata)
+    await callback.on_phase("template_selecting")
+    label_stats = LabelStats.from_segments(enforced_labels)
+    template_result = template_selector.select_template(
+        registry, persona, effective_contexts, effective_topic, effective_purpose, label_stats, masked,
+    )
+    chosen_template = template_result.template
+    effective_sections = template_result.effective_sections
+    await callback.on_template_selected(chosen_template, metadata_overridden)
+
+    # G) Redact
+    await callback.on_phase("redacting")
+    redaction = redaction_service.process(enforced_labels)
+    await callback.on_redacted(enforced_labels, redaction.red_count)
+
     # Count tiers
     green_count = sum(1 for s in enforced_labels if s.label.tier == SegmentLabelTier.GREEN)
     yellow_count = redaction.yellow_count
@@ -347,9 +339,9 @@ async def execute_analysis(
 
     logger.info(
         "[Pipeline] Analysis complete — segments=%d, GREEN=%d, YELLOW=%d, RED=%d, "
-        "booster=%s, situation=%s, template=%s, gating=%s",
+        "booster=%s, situation=%s, template=%s, override=%s",
         len(segments), green_count, yellow_count, red_count,
-        booster_fired, situation_fired, chosen_template.id, context_gating_fired,
+        booster_fired, situation_fired, chosen_template.id, metadata_overridden,
     )
 
     return AnalysisPhaseResult(
@@ -364,7 +356,7 @@ async def execute_analysis(
         total_analysis_completion_tokens=total_completion_tokens,
         identity_booster_fired=booster_fired,
         situation_analysis_fired=situation_fired,
-        context_gating_fired=context_gating_fired,
+        metadata_overridden=metadata_overridden,
         chosen_template_id=chosen_template.id,
         chosen_template=chosen_template,
         effective_sections=effective_sections,
@@ -530,7 +522,7 @@ async def execute_final(
         retry_count=retry_count,
         identity_booster_fired=analysis.identity_booster_fired,
         situation_analysis_fired=analysis.situation_analysis_fired,
-        context_gating_fired=analysis.context_gating_fired,
+        metadata_overridden=analysis.metadata_overridden,
         chosen_template_id=analysis.chosen_template_id,
         total_latency_ms=total_latency,
     )

@@ -101,26 +101,18 @@ const STEPS: StepDef[] = [
     isLlm: true,
   },
   {
-    id: 'template_select',
-    label: '구조 템플릿 선택',
-    activeLabel: '템플릿 선택 중',
-    runPhases: ['template_selecting'],
-  },
-  {
-    id: 'context_gating',
-    label: '컨텍스트 게이팅',
-    activeLabel: '메타데이터 검증 중',
-    runPhases: ['context_gating'],
-    skipPhases: ['context_gating_skipped'],
-    isLlm: true,
-  },
-  {
     id: 'situation',
     label: '상황 분석',
     activeLabel: '상황 분석 중',
     runPhases: ['situation_analyzing'],
     skipPhases: ['situation_skipped'],
     isLlm: true,
+  },
+  {
+    id: 'template_select',
+    label: '구조 템플릿 선택',
+    activeLabel: '템플릿 선택 중',
+    runPhases: ['template_selecting'],
   },
   {
     id: 'redact',
@@ -336,12 +328,12 @@ function StepContent({
             <span className="text-text">{chosenTemplate.templateName}</span>
             <span className="text-text-secondary/50 font-mono">({chosenTemplate.templateId})</span>
           </div>
-          {chosenTemplate.contextGatingFired && (
+          {chosenTemplate.metadataOverridden && (
             <div className="flex items-center gap-1 text-violet-500">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
-              <span>게이팅 LLM이 템플릿을 조정함</span>
+              <span>상황 분석이 메타데이터를 보정함</span>
             </div>
           )}
         </div>

@@ -86,7 +86,7 @@ class PipelineStats:
     retry_count: int
     identity_booster_fired: bool
     situation_analysis_fired: bool
-    context_gating_fired: bool
+    metadata_overridden: bool
     chosen_template_id: str
     total_latency_ms: int
 

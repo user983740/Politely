@@ -1,7 +1,8 @@
-"""Situation analysis: extracts objective facts and core intent from text.
+"""Situation analysis: extracts objective facts, core intent, and metadata validation.
 
-Outputs structured JSON (facts + intent).
+Outputs structured JSON (facts + intent + metadata_check).
 Provides Final model with accurate context to reduce hallucination.
+Metadata validation replaces the old ContextGating separate LLM call.
 """
 
 import json
@@ -10,14 +11,15 @@ import re
 from dataclasses import dataclass
 
 from app.models.domain import LabeledSegment, LlmCallResult
-from app.models.enums import Persona, SegmentLabelTier, SituationContext, ToneLevel
+from app.models.enums import Persona, Purpose, SegmentLabelTier, SituationContext, ToneLevel, Topic
 from app.pipeline import prompt_builder
 
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o-mini"
 TEMPERATURE = 0.2
-MAX_TOKENS = 500
+MAX_TOKENS = 650
+OVERRIDE_CONFIDENCE_THRESHOLD = 0.72
 
 _KOREAN_WORD_PATTERN = re.compile(r"[가-힣]{2,}")
 _STOPWORDS = frozenset({
@@ -33,16 +35,30 @@ class Fact:
 
 
 @dataclass(frozen=True)
+class MetadataCheck:
+    should_override: bool
+    confidence: float
+    inferred_topic: Topic | None
+    inferred_purpose: Purpose | None
+    inferred_primary_context: SituationContext | None
+
+    def meets_threshold(self) -> bool:
+        return self.should_override and self.confidence >= OVERRIDE_CONFIDENCE_THRESHOLD
+
+
+@dataclass(frozen=True)
 class SituationAnalysisResult:
     facts: list[Fact]
     intent: str
     prompt_tokens: int
     completion_tokens: int
+    metadata_check: MetadataCheck | None = None
 
 
 SYSTEM_PROMPT = (
     "당신은 한국어 메시지 상황 분석 전문가입니다.\n"
-    "원문과 메타데이터를 분석하여 객관적 사실(facts)과 화자의 핵심 목적(intent)을 추출합니다.\n\n"
+    "원문과 메타데이터를 분석하여 객관적 사실(facts)과 화자의 핵심 목적(intent)을 추출합니다.\n"
+    "또한 사용자가 선택한 메타데이터(주제/목적)가 실제 텍스트와 일치하는지 검증합니다.\n\n"
     "## 규칙\n"
     "1. facts: 원문에서 직접 읽히는 객관적 사실만 추출 (최대 5개)\n"
     "2. 각 fact의 content: 사실을 명확한 1문장으로 요약\n"
@@ -52,13 +68,35 @@ SYSTEM_PROMPT = (
     "6. 생략된 주어 → 문맥에서 추론하여 복원\n"
     "7. `{{TYPE_N}}` 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}})는 그대로 유지\n"
     "8. 근거 없는 추측 금지. 원문에서 직접 읽히는 것만\n\n"
+    "## 메타데이터 검증 규칙\n"
+    "주제(topic)와 목적(purpose)이 제공된 경우, 실제 텍스트 내용과 비교하여 검증합니다.\n"
+    "- 메타데이터가 텍스트와 **명백히 불일치**할 때만 should_override=true\n"
+    "- 애매하거나 부분적으로 일치하면 should_override=false (사용자 의도 존중)\n"
+    "- confidence: 불일치 확신도 (0.0~1.0)\n"
+    "- inferred 값은 확신이 있을 때만 제공, 아니면 null\n\n"
+    "Topic 값: REFUND_CANCEL, OUTAGE_ERROR, ACCOUNT_PERMISSION, DATA_FILE, SCHEDULE_DEADLINE, "
+    "COST_BILLING, CONTRACT_TERMS, HR_EVALUATION, ACADEMIC_GRADE, COMPLAINT_REGULATION, OTHER\n"
+    "Purpose 값: INFO_DELIVERY, DATA_REQUEST, SCHEDULE_COORDINATION, APOLOGY_RECOVERY, "
+    "RESPONSIBILITY_SEPARATION, REJECTION_NOTICE, REFUND_REJECTION, WARNING_PREVENTION, "
+    "RELATIONSHIP_RECOVERY, NEXT_ACTION_CONFIRM, ANNOUNCEMENT\n"
+    "Context 값: REQUEST, SCHEDULE_DELAY, URGING, REJECTION, APOLOGY, COMPLAINT, ANNOUNCEMENT, "
+    "FEEDBACK, BILLING, SUPPORT, CONTRACT, RECRUITING, CIVIL_COMPLAINT, GRATITUDE\n\n"
     "## 출력 형식 (JSON만, 다른 텍스트 금지)\n"
     "{\n"
     '  "facts": [\n'
     '    {"content": "사실 요약", "source": "원문 그대로 인용"},\n'
     "    ...\n"
     "  ],\n"
-    '  "intent": "화자의 핵심 목적"\n'
+    '  "intent": "화자의 핵심 목적",\n'
+    '  "metadata_check": {\n'
+    '    "should_override": false,\n'
+    '    "confidence": 0.0,\n'
+    '    "inferred": {\n'
+    '      "topic": null,\n'
+    '      "purpose": null,\n'
+    '      "primary_context": null\n'
+    "    }\n"
+    "  }\n"
     "}\n\n"
     "## 예시\n\n"
     "입력:\n"
@@ -77,7 +115,12 @@ SYSTEM_PROMPT = (
     '    {"content": "선생님이 보충수업을 해주기로 했으나 아직 연락이 없다", '
     '"source": "선생님이 보충수업 해주신다고 했는데 아직 연락이 없어서요"}\n'
     "  ],\n"
-    '  "intent": "보충수업 일정을 확인하고, 아이의 성적 개선을 위한 후속 조치를 요청하려는 목적"\n'
+    '  "intent": "보충수업 일정을 확인하고, 아이의 성적 개선을 위한 후속 조치를 요청하려는 목적",\n'
+    '  "metadata_check": {\n'
+    '    "should_override": false,\n'
+    '    "confidence": 0.0,\n'
+    '    "inferred": {"topic": null, "purpose": null, "primary_context": null}\n'
+    "  }\n"
     "}"
 )
 
@@ -90,16 +133,24 @@ async def analyze(
     user_prompt: str | None,
     sender_info: str | None,
     ai_call_fn,
+    topic: Topic | None = None,
+    purpose: Purpose | None = None,
 ) -> SituationAnalysisResult:
-    """Run situation analysis LLM call.
+    """Run situation analysis LLM call with integrated metadata validation.
 
     Args:
         ai_call_fn: async function(model, system, user, temp, max_tokens, analysis_context) -> LlmCallResult
+        topic: user-selected topic for metadata validation
+        purpose: user-selected purpose for metadata validation
     """
     parts: list[str] = []
     parts.append(f"받는 사람: {prompt_builder.get_persona_label(persona)}")
     parts.append(f"상황: {', '.join(prompt_builder.get_context_label(ctx) for ctx in contexts)}")
     parts.append(f"말투 강도: {prompt_builder.get_tone_label(tone_level)}")
+    if topic:
+        parts.append(f"주제: {topic.name}")
+    if purpose:
+        parts.append(f"목적: {purpose.name}")
     if sender_info and sender_info.strip():
         parts.append(f"보내는 사람: {sender_info}")
     if user_prompt and user_prompt.strip():
@@ -182,6 +233,7 @@ def filter_red_facts(
         intent=original.intent,
         prompt_tokens=original.prompt_tokens,
         completion_tokens=original.completion_tokens,
+        metadata_check=original.metadata_check,
     )
 
 
@@ -210,12 +262,14 @@ def _parse_result(result: LlmCallResult) -> SituationAnalysisResult:
                 facts.append(Fact(content=content, source=source))
 
         intent = root.get("intent", "")
+        metadata_check = _parse_metadata_check(root.get("metadata_check"))
 
         return SituationAnalysisResult(
             facts=facts,
             intent=intent,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
+            metadata_check=metadata_check,
         )
     except Exception as e:
         logger.warning("[SituationAnalysis] Parse failed: %s", e)
@@ -225,3 +279,34 @@ def _parse_result(result: LlmCallResult) -> SituationAnalysisResult:
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
         )
+
+
+def _parse_metadata_check(node) -> MetadataCheck | None:
+    if node is None or not isinstance(node, dict):
+        return None
+    try:
+        should_override = node.get("should_override", False)
+        confidence = float(node.get("confidence", 0.0))
+        inferred = node.get("inferred", {})
+        inferred_topic = _parse_enum(Topic, inferred.get("topic"))
+        inferred_purpose = _parse_enum(Purpose, inferred.get("purpose"))
+        inferred_context = _parse_enum(SituationContext, inferred.get("primary_context"))
+        return MetadataCheck(
+            should_override=should_override,
+            confidence=confidence,
+            inferred_topic=inferred_topic,
+            inferred_purpose=inferred_purpose,
+            inferred_primary_context=inferred_context,
+        )
+    except Exception as e:
+        logger.warning("[SituationAnalysis] MetadataCheck parse failed: %s", e)
+        return None
+
+
+def _parse_enum(enum_class, value):
+    if value is None or value == "" or value == "null":
+        return None
+    try:
+        return enum_class(value.strip())
+    except (ValueError, AttributeError):
+        return None

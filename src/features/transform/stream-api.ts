@@ -58,7 +58,7 @@ export type ProcessedSegmentsData = ProcessedSegmentItem[];
 export interface TemplateSelectedData {
   templateId: string;
   templateName: string;
-  contextGatingFired: boolean;
+  metadataOverridden: boolean;
 }
 
 export interface StatsData {
@@ -70,7 +70,7 @@ export interface StatsData {
   retryCount: number;
   identityBoosterFired: boolean;
   situationAnalysisFired: boolean;
-  contextGatingFired: boolean;
+  metadataOverridden: boolean;
   chosenTemplateId: string;
   latencyMs: number;
 }
@@ -97,10 +97,8 @@ export type PipelinePhase =
   | 'segment_refining'
   | 'segment_refining_skipped'
   | 'labeling'
-  | 'template_selecting'
-  | 'context_gating'
-  | 'context_gating_skipped'
   | 'situation_analyzing'
+  | 'template_selecting'
   | 'situation_skipped'
   | 'redacting'
   | 'generating'
