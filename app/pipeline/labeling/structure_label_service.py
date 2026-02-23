@@ -18,7 +18,7 @@ from app.pipeline import prompt_builder
 
 logger = logging.getLogger(__name__)
 
-PRIMARY_MODEL = "gpt-4o-mini" if not settings.gemini_api_key else settings.gemini_label_model
+PRIMARY_MODEL = settings.gemini_label_model  # gemini-2.5-flash-lite
 FALLBACK_MODEL = "gpt-4o-mini"
 THINKING_BUDGET = 128
 TEMPERATURE = 0.2

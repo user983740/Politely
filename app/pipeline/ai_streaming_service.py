@@ -147,7 +147,7 @@ async def stream_transform(
 
             # 3. Stream final model
             await push_event("phase", "generating")
-            final_model = settings.openai_model if not settings.gemini_api_key else settings.gemini_final_model
+            final_model = settings.gemini_final_model
 
             thinking_budget = None
             if final_model.startswith("gemini-"):
