@@ -77,11 +77,12 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: OPENAI_API_KEY
+          envs: OPENAI_API_KEY,GEMINI_API_KEY
           script: |
             ENV_FILE="/home/${{ secrets.EC2_USERNAME }}/politeai/.env"
             mkdir -p "$(dirname "$ENV_FILE")"
@@ -96,4 +97,5 @@ jobs:
               -p 8080:8080 \
               --env-file "$ENV_FILE" \
               -e "OPENAI_API_KEY=${OPENAI_API_KEY}" \
+              -e "GEMINI_API_KEY=${GEMINI_API_KEY}" \
               ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest

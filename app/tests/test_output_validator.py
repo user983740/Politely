@@ -175,6 +175,30 @@ def test_core_date_missing():
     assert warnings[0].severity == Severity.WARNING
 
 
+# Rule 13: Informal conjunction
+
+
+def test_informal_conjunction_detected():
+    result = validate(
+        "어쨌든 확인 부탁드립니다. 아무튼 일정을 조율하겠습니다.",
+        "어쨌든 확인해주세요. 아무튼 일정 조율합시다.",
+        None, None, Persona.BOSS,
+    )
+    warnings = [i for i in result.issues if i.type == ValidationIssueType.INFORMAL_CONJUNCTION]
+    assert len(warnings) >= 1
+    assert warnings[0].severity == Severity.WARNING
+
+
+def test_informal_conjunction_not_detected_in_clean():
+    result = validate(
+        "확인 부탁드립니다. 이에 따라 일정을 조율하겠습니다.",
+        "확인해주세요.",
+        None, None, Persona.BOSS,
+    )
+    warnings = [i for i in result.issues if i.type == ValidationIssueType.INFORMAL_CONJUNCTION]
+    assert len(warnings) == 0
+
+
 # Clean output passes
 
 

@@ -1,6 +1,6 @@
 """Rule-based post-processing validator for LLM output.
 
-Checks 12 rules and returns validation results.
+Checks 13 rules and returns validation results.
 """
 
 import logging
@@ -124,6 +124,9 @@ _KOREAN_WORD = re.compile(r"[가-힣]{2,}")
 # Rule 12: S2 effort pattern
 _S2_EFFORT_PATTERN = re.compile(r"확인|점검|검토|살펴|조사|파악|내부.*결과|담당.*확인|로그.*기준")
 
+# Rule 13: Informal conjunctions
+_INFORMAL_CONJUNCTIONS = re.compile(r"(?:^|(?<=\s))(?:어쨌든|아무튼|걍|근데)(?=\s|,|\.|\b)", re.MULTILINE)
+
 # Rule 8: Censorship trace phrases
 _CENSORSHIP_TRACES = [
     "[삭제됨]", "[REDACTED", "삭제된 내용", "제거된 부분", "삭제된 부분",
@@ -143,7 +146,7 @@ def validate(
     redaction_map: dict[str, str] | None = None,
     yellow_segment_texts: list[str] | None = None,
 ) -> ValidationResult:
-    """Validate the LLM output against all 11 rules."""
+    """Validate the LLM output against all 13 rules."""
     if redaction_map is None:
         redaction_map = {}
     if yellow_segment_texts is None:
@@ -162,6 +165,7 @@ def validate(
     _check_core_number_missing(final_text, original_text, spans, issues)
     _check_core_date_missing(final_text, original_text, spans, issues)
     _check_soften_content_dropped(final_text, yellow_segment_texts, issues)
+    _check_informal_conjunction(final_text, issues)
 
     passed = not any(i.severity == Severity.ERROR for i in issues)
 
@@ -566,6 +570,16 @@ def _check_section_s2_missing(
             type=ValidationIssueType.SECTION_S2_MISSING,
             severity=Severity.WARNING,
             message="S2(내부 확인/점검) 섹션 누락: 템플릿에 포함되어 있으나 출력에 확인/점검 표현 없음",
+        ))
+
+
+def _check_informal_conjunction(output: str, issues: list[ValidationIssue]) -> None:
+    for m in _INFORMAL_CONJUNCTIONS.finditer(output):
+        issues.append(ValidationIssue(
+            type=ValidationIssueType.INFORMAL_CONJUNCTION,
+            severity=Severity.WARNING,
+            message=f'구어체 접속사 감지: "{m.group()}"',
+            matched_text=m.group(),
         ))
 
 

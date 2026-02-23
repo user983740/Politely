@@ -15,7 +15,7 @@ from app.pipeline import prompt_builder
 logger = logging.getLogger(__name__)
 
 MODEL = settings.gemini_label_model  # gemini-2.5-flash-lite
-THINKING_BUDGET = 0
+THINKING_BUDGET = None  # No thinking for booster (speed priority)
 TEMPERATURE = 0.2
 MAX_TOKENS = 300
 

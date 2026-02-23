@@ -49,7 +49,9 @@ async def call_gemini(
             "max_output_tokens": actual_max_tokens,
         }
         if thinking_budget is not None:
-            config_kwargs["thinking"] = ThinkingConfig(thinking_budget=thinking_budget)
+            # Gemini API minimum thinking budget is 512
+            actual_budget = max(512, thinking_budget)
+            config_kwargs["thinking_config"] = ThinkingConfig(thinking_budget=actual_budget)
 
         response = await client.aio.models.generate_content(
             model=model,

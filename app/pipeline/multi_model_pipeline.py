@@ -152,6 +152,7 @@ _RETRYABLE_WARNINGS = frozenset({
     ValidationIssueType.CORE_DATE_MISSING,
     ValidationIssueType.SOFTEN_CONTENT_DROPPED,
     ValidationIssueType.SECTION_S2_MISSING,
+    ValidationIssueType.INFORMAL_CONJUNCTION,
 })
 
 
@@ -200,10 +201,10 @@ def compute_thinking_budget(
     if original_text_length >= 500:
         score += 1
     if score == 0:
-        return 256
-    if score <= 2:
         return 512
-    return 768
+    if score <= 2:
+        return 768
+    return 1024
 
 
 # ===== Pipeline execution =====
@@ -564,7 +565,8 @@ async def execute_final(
         retry_hint = (
             "\n\n[검증 재시도 지침] 원문에 있던 숫자/날짜는 모두 유지하세요. "
             "SOFTEN 대상 내용을 삭제하지 말고 재작성하세요. "
-            "S2(내부 확인/점검) 섹션이 있으면 반드시 포함하세요."
+            "S2(내부 확인/점검) 섹션이 있으면 반드시 포함하세요. "
+            "구어체 접속사(어쨌든/아무튼/걍/근데)를 비즈니스 접속사로 대체하세요."
         )
         retry_system = prompt.system_prompt + retry_hint
 

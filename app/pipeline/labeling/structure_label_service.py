@@ -1,6 +1,6 @@
 """LLM-based structure labeling service (LLM call #1 in the pipeline).
 
-Sends segments + metadata to gpt-4o-mini and receives 3-tier labels
+Sends segments + metadata to gemini-2.5-flash-lite and receives 3-tier labels
 (GREEN/YELLOW/RED) for each segment.
 
 14-label system: GREEN 5 + YELLOW 5 + RED 4
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 PRIMARY_MODEL = settings.gemini_label_model  # gemini-2.5-flash-lite
 FALLBACK_MODEL = "gpt-4o-mini"
-THINKING_BUDGET = 128
+THINKING_BUDGET = 512
 TEMPERATURE = 0.2
 MAX_TOKENS = 800
 MIN_COVERAGE = 0.6
@@ -68,6 +68,9 @@ SYSTEM_PROMPT = (
     "- COURTESY: 관례적 예의 (인사, 감사, 호칭)\n"
     "핵심: GREEN은 내용/프레이밍 보존 + 표현 적극 재구성(구어체→비즈니스체 전환 포함). "
     "내용의 프레이밍 자체가 바뀌어야 하면(비난→중립, 직접→간접 등) 반드시 YELLOW\n\n"
+    "※ GREEN 판단 시 '표현의 뉘앙스/어감/말투'는 고려하지 않습니다. "
+    "투박하거나 거친 표현이라도 내용이 필수적이면 GREEN. "
+    "표현 정리는 최종 모델이 담당합니다.\n\n"
     "### GREEN 함정 — 표면 형태에 속지 말 것\n"
     "- 요청 형태이지만 상대 행동을 판단/지시 → NEGATIVE_FEEDBACK\n"
     "- 사실 형태이지만 실제 기능이 자기변호/책임전가 → SELF_JUSTIFICATION 또는 ACCOUNTABILITY\n"
@@ -87,7 +90,12 @@ SYSTEM_PROMPT = (
     "· 약(업무 맥락): \"디자인팀 자료가 3일 늦어서\" → 일정/원인/의존성 업무 맥락 보존, 문체만 정리\n"
     "· 강(방어적 변명): \"제 잘못도 있지만 사실은...\" → 방어 프레임 삭제, 원인 사실만 추출\n"
     "기준: 업무 맥락 정보는 남기되, 자기 방어 문장 구조만 제거.\n"
-    "⚠️ 사실 없이 순수 자기방어만이면 PURE_GRUMBLE(RED) 검토\n\n"
+    "⚠️ 사실 없이 순수 자기방어만이면 PURE_GRUMBLE(RED) 검토\n"
+    "⚠️ **SELF_JUSTIFICATION vs PRIVATE_TMI 구분**: "
+    "업무 의존성/일정/원인 사실이 포함된 변명 → SELF_JUSTIFICATION(YELLOW). "
+    "예: \"디자인팀 자료 3일 지연\" = YELLOW. "
+    "반면, 개인 노력/고생 어필(시간/야근/체력 등) → PRIVATE_TMI(RED). "
+    "예: \"새벽 3시까지 했고\", \"야근했고\", \"밤새 작업\" = RED\n\n"
     "**NEGATIVE_FEEDBACK** (부정적 평가):\n"
     "상대의 행동/결과/능력에 대한 부정적 평가나 피드백.\n"
     "\"퀄리티가 떨어진다\", \"좀 신경 써주시면\" 등.\n"
@@ -108,12 +116,17 @@ SYSTEM_PROMPT = (
     "**즉시 RED 패턴**: 개인 건강/신체 상태(\"허리 아프고\", \"몸이 안 좋아서\"), "
     "가정사/집안일(\"이사 준비\", \"집안일이 있어서\", \"애가 아파서\"), "
     "사적 생활 일정(\"새벽 3시까지 했고\", \"밤새 작업\"), "
+    "야근/과도한 노력 어필(\"야근했고\", \"주말에도 나왔고\", \"새벽까지 했고\", \"밤새 작업했는데\", \"휴일 반납\"), "
     "직무 스트레스/감정적 한계 토로(\"멘탈이 나간다\", \"스트레스 받는다\", \"지쳐간다\", \"번아웃\"). "
     "삭제해도 메시지 용건 이해에 전혀 지장 없는 사적 정보 → RED\n"
     "- PURE_GRUMBLE: 순수 넋두리/체념/한탄 — 용건과 완전히 무관. "
     "**즉시 RED 패턴**: 체념/포기(\"진짜 모르겠습니다\", \"이러다 다 망한다\"), "
     "피해의식/억울함(\"저만 탓받는 느낌\", \"항상 제가 당하는 느낌\"), "
     "사실 없는 감정 토로(\"너무 힘들다\", \"이게 말이 되냐\")\n\n"
+    "⚠️ 같은 내용이라도 발신자→수신자 관계에서 적절하지 않은 비판/불만은 PURE_GRUMBLE. "
+    "예: 연구생→교수 '일정이 빡빡하면 퀄리티가 나올 수 없다' = "
+    "맥락상 수신자에게 전달할 내용이 아님 → PURE_GRUMBLE(RED). "
+    "동료에게 같은 말 = YELLOW 가능.\n\n"
     "### RED 분류 핵심 자문\n"
     "RED 판단 전 스스로 물어보세요:\n"
     "1. \"이 세그먼트를 완전히 삭제해도 메시지의 핵심 용건이 전달되는가?\" → YES이면 RED 후보\n"
