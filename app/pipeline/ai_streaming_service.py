@@ -314,7 +314,8 @@ async def _stream_gemini_final_model(
         "max_output_tokens": max_tokens,
     }
     if thinking_budget is not None:
-        config_kwargs["thinking_config"] = ThinkingConfig(thinking_budget=thinking_budget)
+        actual_budget = max(512, thinking_budget)
+        config_kwargs["thinking_config"] = ThinkingConfig(thinking_budget=actual_budget)
 
     stream = await client.aio.models.generate_content_stream(
         model=model_name,

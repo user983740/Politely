@@ -146,7 +146,7 @@ def validate(
     redaction_map: dict[str, str] | None = None,
     yellow_segment_texts: list[str] | None = None,
 ) -> ValidationResult:
-    """Validate the LLM output against all 13 rules."""
+    """Validate the LLM output against 12 base rules (S2 check is in validate_with_template)."""
     if redaction_map is None:
         redaction_map = {}
     if yellow_segment_texts is None:
