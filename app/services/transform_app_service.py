@@ -1,7 +1,7 @@
 from app.core.config import settings
 from app.models.domain import TransformResult
 from app.models.enums import Persona, SituationContext, ToneLevel
-from app.pipeline.ai_transform_service import call_openai_with_model
+from app.pipeline.ai_call_router import call_llm
 from app.pipeline.multi_model_pipeline import execute_analysis, execute_final
 
 
@@ -19,11 +19,11 @@ async def transform(
     analysis = await execute_analysis(
         persona, contexts, tone_level, original_text,
         user_prompt, sender_info, False,
-        ai_call_fn=call_openai_with_model,
+        ai_call_fn=call_llm,
     )
 
     result = await execute_final(
-        settings.openai_model,
+        settings.gemini_final_model,
         analysis,
         persona,
         contexts,
@@ -31,7 +31,7 @@ async def transform(
         original_text,
         sender_info,
         settings.openai_max_tokens_paid,
-        ai_call_fn=call_openai_with_model,
+        ai_call_fn=call_llm,
     )
 
     return TransformResult(transformed_text=result.transformed_text)

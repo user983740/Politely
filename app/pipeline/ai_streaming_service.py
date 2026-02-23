@@ -12,17 +12,21 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 
+import google.genai as genai
+from google.genai.types import GenerateContentConfig, ThinkingConfig
 from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.models.domain import LabeledSegment, LockedSpan, Segment
 from app.models.enums import Persona, Purpose, SegmentLabelTier, SituationContext, ToneLevel, Topic
 from app.pipeline import cache_metrics_tracker
-from app.pipeline.ai_transform_service import AiTransformError, call_openai_with_model
+from app.pipeline.ai_call_router import call_llm
+from app.pipeline.ai_transform_service import AiTransformError
 from app.pipeline.gating.situation_analysis_service import SituationAnalysisResult
 from app.pipeline.multi_model_pipeline import (
     PipelineProgressCallback,
     build_final_prompt,
+    compute_thinking_budget,
     execute_analysis,
 )
 from app.pipeline.preprocessing import locked_span_masker
@@ -32,6 +36,7 @@ from app.pipeline.validation import output_validator
 logger = logging.getLogger(__name__)
 
 _client: AsyncOpenAI | None = None
+_gemini_client: genai.Client | None = None
 
 
 def _get_client() -> AsyncOpenAI:
@@ -39,6 +44,13 @@ def _get_client() -> AsyncOpenAI:
     if _client is None:
         _client = AsyncOpenAI(api_key=settings.openai_api_key)
     return _client
+
+
+def _get_gemini_client() -> genai.Client:
+    global _gemini_client
+    if _gemini_client is None:
+        _gemini_client = genai.Client(api_key=settings.gemini_api_key)
+    return _gemini_client
 
 
 async def stream_transform(
@@ -126,7 +138,7 @@ async def stream_transform(
                 persona, contexts, tone_level, original_text,
                 user_prompt, sender_info, identity_booster_toggle,
                 topic, purpose,
-                ai_call_fn=call_openai_with_model,
+                ai_call_fn=call_llm,
                 callback=StreamCallback(),
             )
 
@@ -135,9 +147,18 @@ async def stream_transform(
 
             # 3. Stream final model
             await push_event("phase", "generating")
+            final_model = settings.openai_model if not settings.gemini_api_key else settings.gemini_final_model
+
+            thinking_budget = None
+            if final_model.startswith("gemini-"):
+                thinking_budget = compute_thinking_budget(
+                    analysis.segments, analysis.labeled_segments, len(original_text),
+                )
+
             final_stream_result = await _stream_final_model(
-                settings.openai_model, prompt.system_prompt, prompt.user_message,
+                final_model, prompt.system_prompt, prompt.user_message,
                 prompt.locked_spans, final_max_tokens, push_event,
+                thinking_budget=thinking_budget,
             )
 
             # 4. Validate output
@@ -175,9 +196,12 @@ async def stream_transform(
                 )
                 retry_user = prompt.user_message + error_hint + locked_span_hint
 
+                retry_thinking = min(1024, thinking_budget * 2) if thinking_budget else None
+
                 active_result = await _stream_final_model(
-                    settings.openai_model, prompt.system_prompt, retry_user,
+                    final_model, prompt.system_prompt, retry_user,
                     prompt.locked_spans, final_max_tokens, push_event,
+                    thinking_budget=retry_thinking,
                 )
 
                 validation = output_validator.validate_with_template(
@@ -213,6 +237,8 @@ async def stream_transform(
                 "metadataOverridden": analysis.metadata_overridden,
                 "chosenTemplateId": analysis.chosen_template_id,
                 "latencyMs": total_latency,
+                "yellowRecoveryApplied": analysis.yellow_recovery_applied,
+                "yellowUpgradeCount": analysis.yellow_upgrade_count,
             })
 
             # 7. Send usage
@@ -269,6 +295,56 @@ async def stream_transform(
                 pass
 
 
+async def _stream_gemini_final_model(
+    model_name: str,
+    system_prompt: str,
+    user_message: str,
+    locked_spans: list[LockedSpan],
+    max_tokens: int,
+    push_event,
+    *,
+    thinking_budget: int | None = None,
+) -> dict:
+    """Stream Gemini final model deltas and return unmasked text + token usage."""
+    client = _get_gemini_client()
+
+    config_kwargs: dict = {
+        "system_instruction": system_prompt,
+        "temperature": settings.openai_temperature,
+        "max_output_tokens": max_tokens,
+    }
+    if thinking_budget is not None:
+        config_kwargs["thinking"] = ThinkingConfig(thinking_budget=thinking_budget)
+
+    stream = await client.aio.models.generate_content_stream(
+        model=model_name,
+        contents=user_message,
+        config=GenerateContentConfig(**config_kwargs),
+    )
+
+    full_content: list[str] = []
+    prompt_tokens = 0
+    completion_tokens = 0
+
+    async for chunk in stream:
+        if chunk.text:
+            full_content.append(chunk.text)
+            await push_event("delta", chunk.text)
+        if chunk.usage_metadata:
+            prompt_tokens = chunk.usage_metadata.prompt_token_count or 0
+            completion_tokens = chunk.usage_metadata.candidates_token_count or 0
+
+    raw_content = "".join(full_content).strip()
+    unmask_result = locked_span_masker.unmask(raw_content, locked_spans)
+
+    return {
+        "unmasked_text": unmask_result.text,
+        "raw_content": raw_content,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
+
+
 async def _stream_final_model(
     model_name: str,
     system_prompt: str,
@@ -276,11 +352,20 @@ async def _stream_final_model(
     locked_spans: list[LockedSpan],
     max_tokens: int,
     push_event,
+    *,
+    thinking_budget: int | None = None,
 ) -> dict:
     """Stream the final model deltas and return unmasked text + token usage.
 
     Returns dict with keys: unmasked_text, raw_content, prompt_tokens, completion_tokens
+    Routes to Gemini or OpenAI based on model name prefix.
     """
+    if model_name.startswith("gemini-"):
+        return await _stream_gemini_final_model(
+            model_name, system_prompt, user_message, locked_spans,
+            max_tokens, push_event, thinking_budget=thinking_budget,
+        )
+
     client = _get_client()
 
     stream = await client.chat.completions.create(

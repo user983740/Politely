@@ -7,14 +7,15 @@ import logging
 import re
 from dataclasses import dataclass
 
+from app.core.config import settings
 from app.models.domain import LlmCallResult, LockedSpan
 from app.models.enums import LockedSpanType, Persona
 from app.pipeline import prompt_builder
-from app.pipeline.preprocessing import locked_span_masker
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-4o-mini" if not settings.gemini_api_key else settings.gemini_label_model
+THINKING_BUDGET = 0
 TEMPERATURE = 0.2
 MAX_TOKENS = 300
 
@@ -41,8 +42,7 @@ SYSTEM_PROMPT = (
 
 @dataclass(frozen=True)
 class BoosterResult:
-    remasked_text: str
-    all_spans: list[LockedSpan]
+    extra_spans: list[LockedSpan]  # newly found SEMANTIC spans only
     prompt_tokens: int
     completion_tokens: int
 
@@ -61,35 +61,17 @@ async def boost(
     """
     user_message = f"받는 사람: {prompt_builder.get_persona_label(persona)}\n\n원문:\n{masked_text}"
 
-    result: LlmCallResult = await ai_call_fn(MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None)
+    result: LlmCallResult = await ai_call_fn(
+        MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,
+        thinking_budget=THINKING_BUDGET,
+    )
 
     new_spans = _parse_semantic_spans(normalized_text, current_spans, result.content)
 
-    if not new_spans:
-        return BoosterResult(masked_text, current_spans, result.prompt_tokens, result.completion_tokens)
+    if new_spans:
+        logger.info("[IdentityBooster] Found %d semantic spans", len(new_spans))
 
-    # Combine and re-index with type-specific placeholders
-    all_spans = sorted(list(current_spans) + new_spans, key=lambda s: s.start_pos)
-
-    prefix_counters: dict[str, int] = {}
-    reindexed: list[LockedSpan] = []
-    for s in all_spans:
-        prefix = s.type.placeholder_prefix
-        prefix_counters[prefix] = prefix_counters.get(prefix, 0) + 1
-        counter = prefix_counters[prefix]
-        reindexed.append(LockedSpan(
-            index=counter,
-            original_text=s.original_text,
-            placeholder=f"{{{{{prefix}_{counter}}}}}",
-            type=s.type,
-            start_pos=s.start_pos,
-            end_pos=s.end_pos,
-        ))
-
-    remasked = locked_span_masker.mask(normalized_text, reindexed)
-    logger.info("[IdentityBooster] Added %d semantic spans (total: %d)", len(new_spans), len(reindexed))
-
-    return BoosterResult(remasked, reindexed, result.prompt_tokens, result.completion_tokens)
+    return BoosterResult(new_spans, result.prompt_tokens, result.completion_tokens)
 
 
 def _parse_semantic_spans(

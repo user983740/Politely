@@ -11,13 +11,16 @@ import logging
 import re
 from dataclasses import dataclass
 
+from app.core.config import settings
 from app.models.domain import LabeledSegment, LlmCallResult, Segment
 from app.models.enums import Persona, SegmentLabel, SegmentLabelTier, SituationContext, ToneLevel
 from app.pipeline import prompt_builder
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o-mini"
+PRIMARY_MODEL = "gpt-4o-mini" if not settings.gemini_api_key else settings.gemini_label_model
+FALLBACK_MODEL = "gpt-4o-mini"
+THINKING_BUDGET = 128
 TEMPERATURE = 0.2
 MAX_TOKENS = 800
 MIN_COVERAGE = 0.6
@@ -39,6 +42,8 @@ class StructureLabelResult:
     summary_text: str | None
     prompt_tokens: int
     completion_tokens: int
+    yellow_recovery_applied: bool = False
+    yellow_upgrade_count: int = 0
 
 
 SYSTEM_PROMPT = (
@@ -268,7 +273,10 @@ async def label(
     """
     user_message = _build_user_message(persona, contexts, tone_level, user_prompt, sender_info, segments, masked_text)
 
-    result: LlmCallResult = await ai_call_fn(MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None)
+    result: LlmCallResult = await ai_call_fn(
+        PRIMARY_MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,
+        thinking_budget=THINKING_BUDGET,
+    )
 
     logger.debug("[StructureLabel] Raw LLM response:\n%s", result.content)
 
@@ -296,7 +304,8 @@ async def label(
             "코드블록이나 설명 없이 바로 출력하세요."
         )
         retry_result: LlmCallResult = await ai_call_fn(
-            MODEL, SYSTEM_PROMPT, retry_message, TEMPERATURE, MAX_TOKENS, None,
+            PRIMARY_MODEL, SYSTEM_PROMPT, retry_message, TEMPERATURE, MAX_TOKENS, None,
+            thinking_budget=THINKING_BUDGET,
         )
 
         logger.debug("[StructureLabel] Retry raw LLM response:\n%s", retry_result.content)
@@ -324,38 +333,59 @@ async def label(
     # All-GREEN 3-level response
     if len(segments) >= 4 and _is_all_green(labeled):
         logger.warning(
-            "[StructureLabel] All %d segments labeled GREEN with %d+ segments — retrying with 2-pass nudge",
+            "[StructureLabel] All %d segments labeled GREEN with %d+ segments — trying yellow scanner first",
             len(labeled), len(segments),
         )
-        diversity_message = (
-            user_message
-            + "\n\n[시스템 경고] 모든 세그먼트를 GREEN으로 분류했습니다. "
-            "2차 스캔: 각 세그먼트의 하드/소프트 트리거를 다시 확인하세요. "
-            "억지 YELLOW는 금지하되, 놓친 트리거가 있으면 수정하세요. "
-            "확인 항목: (1) 상대 행동/능력 판단, (2) 비난 어조+일반화, (3) 감정 직접 폭발, "
-            "(4) 방어적 변명 구조, (5) 외부 귀책+불만 결합, (6) 추측, (7) 동일 내용 반복"
+
+        # 1) Try server-side yellow trigger scanner before LLM retry
+        from app.pipeline.labeling import yellow_trigger_scanner
+
+        upgrades = yellow_trigger_scanner.scan_yellow_triggers(segments, labeled, persona)
+        if upgrades:
+            logger.info(
+                "[StructureLabel] Yellow scanner recovered %d segment(s): %s",
+                len(upgrades),
+                [(u.segment_id, u.new_label.name, u.score) for u in upgrades],
+            )
+            upgraded_map = {u.segment_id: u.new_label for u in upgrades}
+            upgraded_labeled = [
+                LabeledSegment(ls.segment_id, upgraded_map[ls.segment_id], ls.text, ls.start, ls.end)
+                if ls.segment_id in upgraded_map else ls
+                for ls in labeled
+            ]
+            upgraded_labeled = _fill_missing_labels(upgraded_labeled, segments)
+            return StructureLabelResult(
+                upgraded_labeled, summary, total_prompt, total_completion,
+                yellow_recovery_applied=True,
+                yellow_upgrade_count=len(upgrades),
+            )
+
+        # 2) Scanner found nothing — fall back to gpt-4o-mini (model diversity)
+        logger.info(
+            "[StructureLabel] Yellow scanner found no triggers — falling back to FALLBACK_MODEL (%s)",
+            FALLBACK_MODEL,
         )
-        diversity_result: LlmCallResult = await ai_call_fn(
-            MODEL, SYSTEM_PROMPT, diversity_message, TEMPERATURE, MAX_TOKENS, None,
+        fallback_result: LlmCallResult = await ai_call_fn(
+            FALLBACK_MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,
         )
 
-        logger.debug("[StructureLabel] Diversity retry response:\n%s", diversity_result.content)
+        logger.debug("[StructureLabel] Fallback model response:\n%s", fallback_result.content)
 
-        diversity_labeled = _parse_output(diversity_result.content, masked_text, segments)
-        diversity_summary = _parse_summary(diversity_result.content)
-        total_prompt += diversity_result.prompt_tokens
-        total_completion += diversity_result.completion_tokens
+        fallback_labeled = _parse_output(fallback_result.content, masked_text, segments)
+        fallback_summary = _parse_summary(fallback_result.content)
+        total_prompt += fallback_result.prompt_tokens
+        total_completion += fallback_result.completion_tokens
 
-        if diversity_labeled:
-            has_non_green = any(s.label.tier != SegmentLabelTier.GREEN for s in diversity_labeled)
+        if fallback_labeled:
+            has_non_green = any(s.label.tier != SegmentLabelTier.GREEN for s in fallback_labeled)
             if has_non_green:
-                diversity_labeled = _fill_missing_from_original(diversity_labeled, labeled, segments)
+                fallback_labeled = _fill_missing_from_original(fallback_labeled, labeled, segments)
                 return StructureLabelResult(
-                    diversity_labeled,
-                    diversity_summary if diversity_summary else summary,
+                    fallback_labeled,
+                    fallback_summary if fallback_summary else summary,
                     total_prompt, total_completion,
                 )
-        logger.info("[StructureLabel] Diversity retry also all-GREEN — accepting original result")
+        logger.info("[StructureLabel] Fallback model also all-GREEN — accepting original result")
 
     # Fill any missing segments with COURTESY default
     labeled = _fill_missing_labels(labeled, segments)

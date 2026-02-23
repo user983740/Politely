@@ -31,6 +31,7 @@ async def call_openai_with_model(
     temp: float,
     max_tokens: int,
     analysis_context: str | None,
+    **kwargs,
 ) -> LlmCallResult:
     """Call OpenAI API with explicit model name and token usage tracking.
 

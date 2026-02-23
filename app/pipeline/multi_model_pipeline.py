@@ -31,6 +31,7 @@ from app.models.domain import (
     ValidationIssue,
 )
 from app.models.enums import (
+    LockedSpanType,
     Persona,
     Purpose,
     SegmentLabelTier,
@@ -102,6 +103,8 @@ class AnalysisPhaseResult:
     green_count: int
     yellow_count: int
     red_count: int
+    yellow_recovery_applied: bool = False
+    yellow_upgrade_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,57 @@ _RETRYABLE_WARNINGS = frozenset({
 })
 
 
+# ===== Span merge helper =====
+
+
+def _merge_and_reindex_spans(
+    regex_spans: list[LockedSpan],
+    extra_spans: list[LockedSpan],
+) -> list[LockedSpan]:
+    """Merge regex + semantic spans and re-index with type-specific placeholders."""
+    combined = sorted(list(regex_spans) + list(extra_spans), key=lambda s: s.start_pos)
+    prefix_counters: dict[str, int] = {}
+    reindexed: list[LockedSpan] = []
+    for s in combined:
+        prefix = s.type.placeholder_prefix
+        prefix_counters[prefix] = prefix_counters.get(prefix, 0) + 1
+        counter = prefix_counters[prefix]
+        reindexed.append(LockedSpan(
+            index=counter,
+            original_text=s.original_text,
+            placeholder=f"{{{{{prefix}_{counter}}}}}",
+            type=s.type,
+            start_pos=s.start_pos,
+            end_pos=s.end_pos,
+        ))
+    return reindexed
+
+
+# ===== Dynamic thinking budget =====
+
+
+def compute_thinking_budget(
+    segments: list[Segment],
+    labeled_segments: list[LabeledSegment],
+    original_text_length: int,
+) -> int:
+    """Compute dynamic thinking budget based on complexity signals."""
+    score = 0
+    if len(segments) >= 6:
+        score += 1
+    yellow = sum(1 for s in labeled_segments if s.label.tier == SegmentLabelTier.YELLOW)
+    red = sum(1 for s in labeled_segments if s.label.tier == SegmentLabelTier.RED)
+    if yellow >= 2 or red >= 1:
+        score += 1
+    if original_text_length >= 500:
+        score += 1
+    if score == 0:
+        return 256
+    if score <= 2:
+        return 512
+    return 768
+
+
 # ===== Pipeline execution =====
 
 
@@ -187,8 +241,8 @@ async def execute_analysis(
     from app.pipeline.template.template_registry import TemplateRegistry
 
     if ai_call_fn is None:
-        from app.pipeline.ai_transform_service import call_openai_with_model
-        ai_call_fn = call_openai_with_model
+        from app.pipeline.ai_call_router import call_llm
+        ai_call_fn = call_llm
 
     if callback is None:
         callback = PipelineProgressCallback()
@@ -226,25 +280,19 @@ async def execute_analysis(
             )
         )
 
-    # E?) Identity Booster (gating — before segmentation so new spans are included)
-    all_spans = regex_spans
+    # E?) Identity Booster — launch async (does not block segmentation)
+    booster_task: asyncio.Task | None = None
     if gating_condition_evaluator.should_fire_identity_booster(
         identity_booster_toggle, persona, regex_spans, len(normalized),
     ):
         await callback.on_phase("identity_boosting")
-        boost_result = await identity_lock_booster.boost(
-            persona, normalized, regex_spans, masked, ai_call_fn,
+        booster_task = asyncio.create_task(
+            identity_lock_booster.boost(persona, normalized, regex_spans, masked, ai_call_fn)
         )
-        all_spans = boost_result.all_spans
-        masked = boost_result.remasked_text
-        total_prompt_tokens += boost_result.prompt_tokens
-        total_completion_tokens += boost_result.completion_tokens
-        booster_fired = True
-        await callback.on_spans_extracted(all_spans, masked)
     else:
         await callback.on_phase("identity_skipped")
 
-    # C) Segment (server-side, rule-based)
+    # C) Segment — uses regex-only masked text (unchanged)
     await callback.on_phase("segmenting")
     segments = meaning_segmenter.segment(masked)
 
@@ -270,6 +318,21 @@ async def execute_analysis(
     # D') Server-side RED label enforcement
     enforced_labels = red_label_enforcer.enforce(label_result.labeled_segments)
     await callback.on_labeled(enforced_labels)
+
+    # E?) Collect Booster result (labeling complete, merge spans)
+    all_spans: list[LockedSpan] = list(regex_spans)
+    if booster_task is not None:
+        try:
+            boost_result = await booster_task
+            if boost_result.extra_spans:
+                all_spans = _merge_and_reindex_spans(regex_spans, boost_result.extra_spans)
+                booster_fired = True
+            total_prompt_tokens += boost_result.prompt_tokens
+            total_completion_tokens += boost_result.completion_tokens
+        except Exception as e:
+            logger.warning("[Pipeline] IdentityBooster failed, continuing without: %s", e)
+        if booster_fired:
+            await callback.on_spans_extracted(all_spans, masked)
 
     # Collect Situation Analysis result (before template selection for metadata override)
     situation_result: SituationAnalysisResult | None = None
@@ -363,6 +426,8 @@ async def execute_analysis(
         green_count=green_count,
         yellow_count=yellow_count,
         red_count=red_count,
+        yellow_recovery_applied=label_result.yellow_recovery_applied,
+        yellow_upgrade_count=label_result.yellow_upgrade_count,
     )
 
 
@@ -380,12 +445,23 @@ def build_final_prompt(
     # Assign order by start position
     sorted_segments = sorted(analysis.labeled_segments, key=lambda ls: ls.start)
 
+    # Collect booster (SEMANTIC) spans for segment text masking
+    booster_spans = [s for s in analysis.locked_spans if s.type == LockedSpanType.SEMANTIC]
+
     ordered_segments: list[prompt_builder_final.OrderedSegment] = []
     for i, ls in enumerate(sorted_segments):
         is_red = ls.label.tier == SegmentLabelTier.RED
-        dedupe_key = None if is_red else build_dedupe_key(ls.text)
+        seg_text = ls.text if not is_red else None
+
+        # Apply booster span placeholders to segment text
+        if seg_text and booster_spans:
+            for span in booster_spans:
+                if ls.start <= span.start_pos < ls.end:
+                    seg_text = seg_text.replace(span.original_text, span.placeholder, 1)
+
+        dedupe_key = None if is_red else build_dedupe_key(seg_text)
         must_include = (
-            prompt_builder_final.extract_placeholders(ls.text)
+            prompt_builder_final.extract_placeholders(seg_text)
             if ls.label.tier == SegmentLabelTier.YELLOW
             else []
         )
@@ -394,7 +470,7 @@ def build_final_prompt(
             order=i + 1,
             tier=ls.label.tier.name,
             label=ls.label.name,
-            text=None if is_red else ls.text,
+            text=seg_text,
             dedupe_key=dedupe_key,
             must_include=must_include,
         ))
@@ -432,8 +508,8 @@ async def execute_final(
     from app.pipeline.validation import output_validator
 
     if ai_call_fn is None:
-        from app.pipeline.ai_transform_service import call_openai_with_model
-        ai_call_fn = call_openai_with_model
+        from app.pipeline.ai_call_router import call_llm
+        ai_call_fn = call_llm
 
     start_time = time.monotonic()
 
@@ -442,9 +518,17 @@ async def execute_final(
     # Extract YELLOW segment texts for Rule 11
     yellow_texts = [s.text for s in analysis.labeled_segments if s.label.tier == SegmentLabelTier.YELLOW]
 
+    # Compute thinking budget for Gemini models
+    thinking_budget = None
+    if final_model_name.startswith("gemini-"):
+        thinking_budget = compute_thinking_budget(
+            analysis.segments, analysis.labeled_segments, len(original_text),
+        )
+
     # Call Final model (LLM #2)
     final_result: LlmCallResult = await ai_call_fn(
         final_model_name, prompt.system_prompt, prompt.user_message, -1, max_tokens, None,
+        thinking_budget=thinking_budget,
     )
 
     # Unmask
@@ -495,8 +579,13 @@ async def execute_final(
         error_hint = "\n\n[시스템 검증 오류] " + "; ".join(all_issue_msgs)
         retry_user = prompt.user_message + error_hint + locked_span_hint
 
+        retry_thinking = None
+        if thinking_budget is not None:
+            retry_thinking = min(1024, thinking_budget * 2)
+
         retry_result: LlmCallResult = await ai_call_fn(
             final_model_name, retry_system, retry_user, 0.3, max_tokens, None,
+            thinking_budget=retry_thinking,
         )
         retry_unmask = locked_span_masker.unmask(retry_result.content, prompt.locked_spans)
         validation = output_validator.validate_with_template(
@@ -525,6 +614,8 @@ async def execute_final(
         metadata_overridden=analysis.metadata_overridden,
         chosen_template_id=analysis.chosen_template_id,
         total_latency_ms=total_latency,
+        yellow_recovery_applied=analysis.yellow_recovery_applied,
+        yellow_upgrade_count=analysis.yellow_upgrade_count,
     )
 
     return PipelineResult(

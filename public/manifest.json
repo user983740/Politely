@@ -1,7 +1,7 @@
 {
   "name": "Politely - 한국어 말투 다듬기",
   "short_name": "Politely",
-  "description": "보내기 전 마지막으로 말투를 점검하는 안전망. 상대방에 맞춰 자연스러운 경어체로 변환해 드립니다.",
+  "description": "메시지 보내기 전, AI가 말투를 점검해 드립니다. 상사·고객·교수 등 상대방에 맞춰 자연스러운 존댓말로 바꿔주는 한국어 톤 변환 도구.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

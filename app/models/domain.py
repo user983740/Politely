@@ -89,6 +89,8 @@ class PipelineStats:
     metadata_overridden: bool
     chosen_template_id: str
     total_latency_ms: int
+    yellow_recovery_applied: bool = False
+    yellow_upgrade_count: int = 0
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     openai_max_tokens: int = 2000
     openai_max_tokens_paid: int = 4000
 
+    # Gemini
+    gemini_api_key: str = ""
+    gemini_final_model: str = "gemini-2.5-flash"
+    gemini_label_model: str = "gemini-2.5-flash-lite"
+
     # Segmenter
     segmenter_max_segment_length: int = 250
     segmenter_discourse_marker_min_length: int = 150

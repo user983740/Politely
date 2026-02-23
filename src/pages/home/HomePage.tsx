@@ -629,7 +629,7 @@ export default function HomePage() {
   return (
     <div className="h-screen flex flex-col lg:flex-row">
       <title>Politely - 한국어 말투 다듬기</title>
-      <meta name="description" content="보내기 전 마지막으로 말투를 점검하는 안전망. 상사, 고객, 교수 등 상대방에 맞춰 자연스러운 경어체로 변환해 드립니다." />
+      <meta name="description" content="메시지 보내기 전, AI가 말투를 점검해 드립니다. 상사·고객·교수 등 상대방에 맞춰 자연스러운 존댓말로 바꿔주는 한국어 톤 변환 도구." />
       {/* ===== MOBILE HEADER (hidden on desktop) ===== */}
       <header className="lg:hidden flex items-center justify-between px-4 py-3 border-b border-border bg-bg shrink-0">
         <div className="flex items-center gap-2">
@@ -665,7 +665,7 @@ export default function HomePage() {
       </header>
 
       {/* ===== MOBILE COLLAPSIBLE SETTINGS (hidden on desktop) ===== */}
-      <div className="lg:hidden shrink-0 border-b border-border bg-bg">
+      <div className="lg:hidden shrink-0 border-b border-border bg-bg" data-nosnippet>
         {/* Settings content when open */}
         {settingsOpen && (
           <div className="px-4 pt-4 pb-1">
@@ -698,7 +698,7 @@ export default function HomePage() {
                 )}
               </div>
             ) : (
-              <p className="text-xs text-text-secondary text-center">
+              <p className="text-xs text-text-secondary text-center" data-nosnippet>
                 아래를 눌러 받는 사람·상황·말투를 설정하세요
               </p>
             )}
@@ -715,7 +715,7 @@ export default function HomePage() {
       </div>
 
       {/* ===== DESKTOP SIDEBAR (hidden on mobile) ===== */}
-      <aside className="hidden lg:flex w-[440px] min-w-[400px] bg-bg border-r border-border flex-col shrink-0">
+      <aside className="hidden lg:flex w-[440px] min-w-[400px] bg-bg border-r border-border flex-col shrink-0" data-nosnippet>
         {/* Logo */}
         <div className="px-8 py-6 flex items-center gap-2.5">
           <img
@@ -833,18 +833,23 @@ export default function HomePage() {
             />
           </div>
 
-          <div className="flex items-baseline justify-between mb-3 sm:mb-5 lg:mb-4">
-            <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-text">
-              원문 입력
-            </h1>
-            <span
-              className={`text-sm font-medium tabular-nums ${
-                originalText.length > 0 ? 'text-error' : 'text-text-secondary'
-              }`}
-            >
-              {originalText.length.toLocaleString()} /{' '}
-              {maxTextLength.toLocaleString()}
-            </span>
+          <div className="mb-3 sm:mb-5 lg:mb-4">
+            <div className="flex items-baseline justify-between">
+              <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-text">
+                원문 입력
+              </h1>
+              <span
+                className={`text-sm font-medium tabular-nums ${
+                  originalText.length > 0 ? 'text-error' : 'text-text-secondary'
+                }`}
+              >
+                {originalText.length.toLocaleString()} /{' '}
+                {maxTextLength.toLocaleString()}
+              </span>
+            </div>
+            <p className="text-[13px] text-text-secondary/60 mt-1.5">
+              상대방과 상황에 맞게 AI가 메시지 말투를 자연스러운 존댓말로 다듬어 드립니다.
+            </p>
           </div>
 
           <textarea
