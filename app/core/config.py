@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     # Segmenter
     segmenter_max_segment_length: int = 250
-    segmenter_discourse_marker_min_length: int = 150
-    segmenter_enumeration_min_length: int = 120
+    segmenter_discourse_marker_min_length: int = 80
+    segmenter_enumeration_min_length: int = 60
 
     # Tier
     tier_free_max_text_length: int = 300

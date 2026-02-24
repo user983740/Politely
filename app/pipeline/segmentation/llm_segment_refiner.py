@@ -4,7 +4,7 @@ After rule-based MeaningSegmenter, segments exceeding the length threshold
 are batched into a single LLM call (gpt-4o-mini, temp=0) for semantic splitting.
 
 Flow:
-  1. Filter segments > min_length (default 40 chars)
+  1. Filter segments > min_length (default 30 chars)
   2. Batch long segments into one prompt
   3. LLM inserts ||| delimiters at semantic boundaries
   4. Parse response, validate sub-texts exist in original
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 MODEL = "gpt-4o-mini"
 TEMPERATURE = 0.0
 MAX_TOKENS = 600
-MIN_LENGTH_DEFAULT = 40
+MIN_LENGTH_DEFAULT = 30
 
 SYSTEM_PROMPT = (
     "당신은 한국어 텍스트 의미 분절 전문가입니다.\n\n"

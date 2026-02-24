@@ -10,9 +10,9 @@ Pipeline:
   4. Length-based safety split (confidence: 0.85)
      - 250 char segments split at nearest weak boundary, postposition avoidance
   5. Enumeration detection (confidence: 0.9)
-     - comma lists, delimiter lists, parallel ~go structure (120+ chars only)
+     - comma lists, delimiter lists, parallel ~go structure (60+ chars only)
   6. Discourse marker split (confidence: 0.88)
-     - ~39 markers, sentence-start only, 150+ chars only, compound exclusion
+     - ~39 markers, sentence-start only, 80+ chars only, compound exclusion
   7. Over-segmentation merge
      - 3+ consecutive <5 char segments merged, placeholder boundary protection
 """
@@ -125,7 +125,7 @@ _POSTPOSITIONS = frozenset([
 # Stage 5: Enumeration patterns
 _COMMA_LIST = re.compile(r",\s*")
 _DELIMITER_LIST = re.compile(r"[/\u00B7|]\s*")
-_PARALLEL_GO = regex.compile(r"(?<=[가-힣])고\s+(?=[가-힣])")
+_PARALLEL_GO = regex.compile(r"(?<=[가-힣]고)\s+(?=[가-힣])")
 
 # Stage 6: Discourse markers (sentence-start only)
 _DISCOURSE_MARKER_ALTERNATIVES = (
@@ -610,7 +610,7 @@ def _merge_group(group: list[_SplitUnit]) -> _SplitUnit:
 
 def _apply_split_pattern(
     units: list[_SplitUnit],
-    pattern: re.Pattern,
+    pattern: re.Pattern | regex.Pattern,
     protected_ranges: list[_ProtectedRange],
     stage_confidence: float,
     is_strong_boundary: bool,
