@@ -438,6 +438,7 @@ def build_final_prompt(
     contexts: list[SituationContext],
     tone_level: ToneLevel,
     sender_info: str | None,
+    rag_results=None,
 ) -> FinalPromptPair:
     """Build the final model prompts from analysis results.
 
@@ -478,12 +479,14 @@ def build_final_prompt(
 
     final_system = prompt_builder_final.build_final_system_prompt(
         persona, contexts, tone_level, analysis.chosen_template, analysis.effective_sections,
+        rag_results=rag_results,
     )
     final_user = prompt_builder_final.build_final_user_message(
         persona, contexts, tone_level, sender_info,
         ordered_segments, analysis.locked_spans,
         analysis.situation_analysis, analysis.summary_text,
         analysis.chosen_template, analysis.effective_sections,
+        rag_results=rag_results,
     )
 
     return FinalPromptPair(
@@ -504,6 +507,7 @@ async def execute_final(
     sender_info: str | None,
     max_tokens: int,
     ai_call_fn=None,
+    rag_results=None,
 ) -> PipelineResult:
     """Run the Final model using analysis results."""
     from app.pipeline.validation import output_validator
@@ -514,7 +518,7 @@ async def execute_final(
 
     start_time = time.monotonic()
 
-    prompt = build_final_prompt(analysis, persona, contexts, tone_level, sender_info)
+    prompt = build_final_prompt(analysis, persona, contexts, tone_level, sender_info, rag_results=rag_results)
 
     # Extract YELLOW segment texts for Rule 11
     yellow_texts = [s.text for s in analysis.labeled_segments if s.label.tier == SegmentLabelTier.YELLOW]

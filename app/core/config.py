@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./politeai.db"
 
+    # RAG
+    rag_enabled: bool = False
+    rag_embedding_model: str = "text-embedding-3-small"
+    rag_admin_token: str = ""
+    rag_mmr_duplicate_threshold: float = 0.92
+
     # Environment
     environment: str = "dev"
 

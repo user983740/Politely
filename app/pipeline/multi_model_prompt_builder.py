@@ -220,14 +220,78 @@ def _build_template_section_block(
     return "".join(parts)
 
 
+def _build_rag_system_block(rag_results) -> str:
+    """Build RAG context block for system prompt (forbidden + expression_pool + cushion)."""
+    if rag_results is None or rag_results.is_empty():
+        return ""
+
+    parts: list[str] = []
+
+    # Forbidden — mandatory rules (must NOT appear in output)
+    if rag_results.forbidden:
+        parts.append("\n\n## ⛔ 금지 표현 (출력에 절대 포함 금지)")
+        parts.append("\n아래 표현이 원문에 있더라도 출력에서 반드시 제거하고, 대체 표현을 사용하십시오:")
+        for hit in rag_results.forbidden:
+            alt = hit.alternative or "삭제"
+            parts.append(f'\n- "{hit.content}" → 대체: "{alt}"')
+
+    # Expression pool — reference expressions
+    if rag_results.expression_pool:
+        parts.append("\n\n## 참고 표현 (RAG)")
+        parts.append("\n아래 표현을 참고하되 그대로 복사하지 말고 문맥에 맞게 변형하여 사용:")
+        for hit in rag_results.expression_pool:
+            parts.append(f"\n- {hit.content}")
+
+    # Cushion — YELLOW buffer expressions
+    if rag_results.cushion:
+        parts.append("\n\n## YELLOW 쿠션 참고 (RAG)")
+        parts.append("\nYELLOW 세그먼트 앞에 삽입할 완충 표현 참고 (변형하여 사용):")
+        for hit in rag_results.cushion:
+            parts.append(f"\n- {hit.content}")
+
+    return "".join(parts)
+
+
+def _build_rag_user_block(rag_results) -> str:
+    """Build RAG context block for user message (policy + example + domain_context)."""
+    if rag_results is None:
+        return ""
+
+    parts: list[str] = []
+
+    # Policy references
+    if rag_results.policy:
+        parts.append("\n--- 정책/규정 참고 (RAG) ---\n")
+        for hit in rag_results.policy:
+            parts.append(f"- {hit.content}\n")
+
+    # Domain context
+    if rag_results.domain_context:
+        parts.append("\n--- 도메인 배경 참고 (RAG) ---\n")
+        for hit in rag_results.domain_context:
+            parts.append(f"- {hit.content}\n")
+
+    # Transform examples
+    if rag_results.example:
+        parts.append("\n--- 변환 예시 (RAG) ---\n")
+        for hit in rag_results.example:
+            if hit.original_text:
+                parts.append(f"원문: {hit.original_text}\n")
+            parts.append(f"변환: {hit.content}\n")
+
+    return "".join(parts)
+
+
 def build_final_system_prompt(
     persona: Persona,
     contexts: list[SituationContext],
     tone_level: ToneLevel,
     template: StructureTemplate,
     effective_sections: list[StructureSection],
+    rag_results=None,
 ) -> str:
     base = FINAL_CORE_SYSTEM_PROMPT + _build_template_section_block(template, effective_sections)
+    base += _build_rag_system_block(rag_results)
     return prompt_builder.build_dynamic_blocks(base, persona, contexts, tone_level)
 
 
@@ -242,6 +306,7 @@ def build_final_user_message(
     summary_text: str | None,
     template: StructureTemplate,
     effective_sections: list[StructureSection],
+    rag_results=None,
 ) -> str:
     parts: list[str] = []
 
@@ -262,6 +327,12 @@ def build_final_user_message(
     # Optional: Summary
     if summary_text and summary_text.strip():
         parts.append(f"[요약]: {summary_text}\n\n")
+
+    # Optional: RAG user context (policy, domain, examples)
+    rag_user_block = _build_rag_user_block(rag_results)
+    if rag_user_block:
+        parts.append(rag_user_block)
+        parts.append("\n")
 
     # Build JSON wrapper object
     parts.append("```json\n")

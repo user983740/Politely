@@ -142,8 +142,33 @@ async def stream_transform(
                 callback=StreamCallback(),
             )
 
+            # 1b. RAG retrieval (after analysis, before final prompt)
+            rag_results = None
+            if settings.rag_enabled:
+                try:
+                    from app.services.transform_app_service import _retrieve_rag
+
+                    await push_event("phase", "rag_retrieving")
+                    rag_results = await _retrieve_rag(
+                        original_text, analysis, persona, contexts, tone_level,
+                    )
+                    if rag_results and not rag_results.is_empty():
+                        await push_event("ragResults", {
+                            "totalHits": rag_results.total_hits(),
+                            "categories": {
+                                cat: len(getattr(rag_results, cat))
+                                for cat in [
+                                    "expression_pool", "cushion", "forbidden",
+                                    "policy", "example", "domain_context",
+                                ]
+                                if getattr(rag_results, cat)
+                            },
+                        })
+                except Exception:
+                    logger.warning("[Streaming] RAG retrieval failed, continuing without", exc_info=True)
+
             # 2. Build final prompt
-            prompt = build_final_prompt(analysis, persona, contexts, tone_level, sender_info)
+            prompt = build_final_prompt(analysis, persona, contexts, tone_level, sender_info, rag_results=rag_results)
 
             # 3. Stream final model
             await push_event("phase", "generating")
