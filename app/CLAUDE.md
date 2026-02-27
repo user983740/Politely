@@ -62,7 +62,7 @@ Email service selection: `ENVIRONMENT=prod` → `ResendEmailService`, else → `
 
 | Function | Parameters | Logic | Returns |
 |----------|------------|-------|---------|
-| `transform()` | persona, contexts, tone_level, original_text, user_prompt, sender_info | Validate length, execute_analysis() → execute_final() | `TransformResult` |
+| `transform()` | original_text, user_prompt, sender_info | Validate length, execute_analysis() → execute_final() | `TransformResult` |
 | `validate_transform_request()` | original_text | Check len ≤ 2000 (PAID max) | raises ValueError |
 | `get_max_text_length()` | — | Returns settings.tier_paid_max_text_length (2000) | `int` |
 | `resolve_final_max_tokens()` | — | Returns settings.openai_max_tokens_paid (4000) | `int` |
@@ -235,9 +235,6 @@ Methods: `is_expired() → bool`, `mark_verified() → None`
 
 | Enum | Values |
 |------|--------|
-| `Persona` (6) | BOSS, CLIENT, PARENT, PROFESSOR, OFFICIAL, OTHER |
-| `SituationContext` (14) | REQUEST, SCHEDULE_DELAY, URGING, REJECTION, APOLOGY, COMPLAINT, ANNOUNCEMENT, FEEDBACK, BILLING, SUPPORT, CONTRACT, RECRUITING, CIVIL_COMPLAINT, GRATITUDE |
-| `ToneLevel` (3) | NEUTRAL, POLITE, VERY_POLITE |
 | `Topic` (11) | REFUND_CANCEL, OUTAGE_ERROR, ACCOUNT_PERMISSION, DATA_FILE, SCHEDULE_DEADLINE, COST_BILLING, CONTRACT_TERMS, HR_EVALUATION, ACADEMIC_GRADE, COMPLAINT_REGULATION, OTHER |
 | `Purpose` (11) | INFO_DELIVERY, DATA_REQUEST, SCHEDULE_COORDINATION, APOLOGY_RECOVERY, RESPONSIBILITY_SEPARATION, REJECTION_NOTICE, REFUND_REJECTION, WARNING_PREVENTION, RELATIONSHIP_RECOVERY, NEXT_ACTION_CONFIRM, ANNOUNCEMENT |
 | `SegmentLabelTier` (3) | GREEN, YELLOW, RED |

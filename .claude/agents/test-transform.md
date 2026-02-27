@@ -1,6 +1,6 @@
 ---
 name: test-transform
-description: Pipeline transform quality automated test. Launches haiku sub-agents for data collection, then analyzes transform quality against verification points.
+description: Pipeline transform quality automated test. Launches haiku sub-agents for data collection, then compares pipeline output against Opus reference transforms.
 tools:
   - Bash
   - Read
@@ -13,7 +13,7 @@ model: opus
 
 # test-transform: Pipeline Transform Quality Automated Test
 
-2-step test: haiku agents extract raw pipeline data, then analyze transform quality using verification points.
+2-step test: haiku agents extract raw pipeline data, then compare pipeline output against Opus reference transforms + common quality checklist.
 
 ## User Arguments
 
@@ -140,19 +140,15 @@ For each scenario, produce:
 
 **Transform Result Feedback**:
 
-Compare actual transform vs **Verification Points** (read `/home/sms02/PoliteAi/.claude/skills/test-transform/verification-points.md`) for this scenario. **Only mention items with problems.** Skip items with no issues.
+Read two files:
+- **Opus Reference**: `/home/sms02/PoliteAi/.claude/skills/test-transform/reference-transforms.md` — pre-generated ideal transform for this scenario
+- **Common Checklist**: `/home/sms02/PoliteAi/.claude/skills/test-transform/verification-points.md` — 9 structural quality checks
 
-Reference criteria (use only when relevant):
+Evaluate in two parts:
 
-- **Labeling appropriateness** — GREEN/YELLOW/RED errors, trigger judgment errors
-- **Meaning preservation** — GREEN core fact/number/request/deadline missing
-- **RED handling** — aggressive/unnecessary content remaining, "[삭제됨]" traces
-- **YELLOW rewriting** — defensive/emotional/blaming not properly softened
-- **Tone appropriateness** — honorific mismatch for persona/context
-- **Fixed expression preservation** — URL, email, phone, account, filename altered/missing
-- **Naturalness** — mechanical repetition (same ending 3x+), LLM meta comments
-- **Listener perspective** — sarcastic/passive-aggressive remaining, unclear intent
-- **Overall completeness** — flow breaks, tone inconsistency, not actually sendable
+**Part A — Opus 레퍼런스 비교**: Pipeline result과 Opus reference를 나란히 놓고 비교. 레퍼런스 대비 파이프라인 결과가 **더 나은 점 / 부족한 점 / 다르지만 수용 가능한 점**을 구체적으로 서술. 레퍼런스를 기준으로 판단하되, 파이프라인이 레퍼런스보다 나은 부분은 인정.
+
+**Part B — 공통 체크리스트**: 9개 항목 중 **FAIL인 것만** 기재. 전부 PASS면 "체크리스트 전항 PASS" 한 줄.
 
 **Overall Assessment**:
 

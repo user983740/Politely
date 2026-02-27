@@ -13,8 +13,7 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 from app.models.domain import LabeledSegment, LlmCallResult, Segment
-from app.models.enums import Persona, SegmentLabel, SegmentLabelTier, SituationContext, ToneLevel
-from app.pipeline import prompt_builder
+from app.models.enums import SegmentLabel, SegmentLabelTier
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +61,10 @@ SYSTEM_PROMPT = (
     "## 14개 라벨 체계\n\n"
     "### GREEN (보존) — 5개\n"
     "- CORE_FACT: 핵심 사실 (기한, 수치, 상태, 결과, 구체적 행동 계획)\n"
-    "- CORE_INTENT: 핵심 요청/목적 (부탁, 제안, 대안, 질문)\n"
+    "- CORE_INTENT: 핵심 요청/목적 (부탁, 제안, 대안, 질문). "
+    "⚠️ 의도 안에 위협/배제/압박이 포함되면 NEGATIVE_FEEDBACK 검토: "
+    "\"빠져도 됨\", \"알아서 해\", \"안 하면 말고\" 등은 표면상 제안이지만 "
+    "실제 기능은 부정적 피드백/압박\n"
     "- REQUEST: 명시적 요청/부탁 — 단, 요청 자체가 수신자에게 부적절하면 YELLOW\n"
     "- APOLOGY: 사과/양해 구하기\n"
     "- COURTESY: 관례적 예의 (인사, 감사, 호칭) + 수신자 상황 공감/인정 "
@@ -128,15 +130,6 @@ SYSTEM_PROMPT = (
     "예: 연구생→교수 '일정이 빡빡하면 퀄리티가 나올 수 없다' = "
     "맥락상 수신자에게 전달할 내용이 아님 → PURE_GRUMBLE(RED). "
     "동료에게 같은 말 = YELLOW 가능.\n\n"
-    "## 분리 기준\n\n"
-    "**ACCOUNTABILITY vs PERSONAL_ATTACK**: \"비난 빼면 사실이 남는가?\"\n"
-    "- \"서버 설정 변경 후 오류가 발생한 것으로 확인됩니다\" → ACCOUNTABILITY (약): 사실 보고\n"
-    "- \"귀사 서버 설정이 이상해서 생긴거고 제가 지난번에도 말했는데\" → ACCOUNTABILITY (강): 사실+비난\n"
-    "- \"고객님이 매번 이러니까 문제가 생기는 거예요\" → PERSONAL_ATTACK (RED): 사실 없이 비난\n\n"
-    "**SELF_JUSTIFICATION vs PURE_GRUMBLE**: \"방어 빼면 원인 사실이 남는가?\"\n"
-    "- \"디자인팀 자료가 3일 늦게 와서 일정이 밀렸습니다\" → SELF_JUSTIFICATION (약): 업무 맥락\n"
-    "- \"제 잘못도 있지만 사실은 디자인팀에서 너무 늦게 줘서요\" → SELF_JUSTIFICATION (강): 방어+사실\n"
-    "- \"제 잘못이 아니에요 다들 그런 상황이면 똑같았을 거예요\" → PURE_GRUMBLE (RED): 사실 없는 넋두리\n\n"
     "## 판단 프로세스 — 4단계 + 하드/소프트 트리거\n\n"
     "### 1단계: 내용 필요성\n"
     "이 세그먼트를 통째로 삭제하면 메시지가 이해되는가?\n"
@@ -157,46 +150,30 @@ SYSTEM_PROMPT = (
     "- 감정 간접 표출 (\"좀 그렇다\", \"아쉽다\")\n"
     "- 근거 약한 추측 (\"아마\", \"~것 같다\", \"분명\")\n"
     "- 동일 내용의 다른 표현으로 반복\n"
-    "- [수신자별 — persona+context 조합 고려]\n"
-    "  BOSS: 상사 결정 불만/업무 과중 호소\n"
-    "  CLIENT: 고객 과실 언급/이용 방식 비판 (단, 장애/오류에서 보고체 RCA는 소프트 완화)\n"
-    "  PARENT: 양육 지시/가정환경 언급\n"
-    "  PROFESSOR: 수업 방식 의견\n"
-    "  OFFICIAL: 절차 불만/담당자 비판\n"
-    "  OTHER: 상대 영역 침범\n\n"
+    "- 수신자 입장에서 불편할 수 있는 내용:\n"
+    "  상대 결정/판단 불만, 상대 과실 언급/비판, 전문 영역 침범, 업무 방식 지적\n"
+    "  (단, 장애/오류 상황에서 보고체 RCA는 소프트 완화)\n\n"
     "하드 0개 + 소프트 0~1개 → GREEN\n"
     "하드 1개+ → YELLOW\n"
     "소프트 2개+ → YELLOW\n\n"
+    "◆ 오분류 방지 — **표면 형태**가 아니라 **실제 기능**으로 판단:\n"
+    "- 요청 형태의 지시 → 실제 내용이 상대 행동 판단/지시면 YELLOW(NEGATIVE_FEEDBACK)\n"
+    "- 사실 형태의 자기변호 → 실제 내용이 자기변호/책임전가면 YELLOW(SELF_JUSTIFICATION/ACCOUNTABILITY)\n"
+    "- 인사/사과 형태의 비꼼 → 실제 내용이 비꼼이면 EMOTIONAL 또는 AGGRESSION(RED)\n"
+    "- 사과 형태의 변명 → 실제 내용이 변명/책임회피면 YELLOW(SELF_JUSTIFICATION)\n"
+    "- 장황한 설명 → 핵심 사실 1개 + 동일 내용 반복 2~3개면 반복 부분은 YELLOW(EXCESS_DETAIL)\n\n"
     "### 3단계: RED vs YELLOW 판정\n"
     "1단계에서 \"삭제해도 이해됨 + 예의 아님\"으로 온 세그먼트:\n\n"
-    "자문: ① \"삭제해도 핵심 용건이 전달되고, 수신자에게 유용한 정보가 없는가?\" → YES이면 RED 후보\n"
-    "② \"개인 건강/가정사/직무 피로인가, 사실 없이 불만/체념만인가?\" → YES이면 RED 확정\n\n"
-    "RED 패턴 (하나라도 해당 → RED):\n"
-    "- 욕설/비속어/축약 (초성 욕설 ㅅㅂ, ㅄ 등 포함)\n"
-    "- 비꼬는 칭찬 + 조롱 표식(ㅋㅋ, ^^, ㅎㅎ) — 사실 포함 불문 RED\n"
-    "- 상대 인격/능력 직접 비하 (\"무능하다\", \"뇌가 있냐\", \"그것도 못 해?\")\n"
-    "- \"매번/맨날\" + 행동 비난 (사실 기반 아닌 일반화 비난)\n"
-    "- 수신자와 무관한 순수 사적 불만/한탄\n"
-    "- 구체적 사실 정보 없이 비난만으로 구성\n\n"
+    "경계 판단 자문:\n"
+    "- ACCOUNTABILITY vs PERSONAL_ATTACK: \"비난 빼면 사실이 남는가?\" 남으면 YELLOW, 없으면 RED\n"
+    "- SELF_JUSTIFICATION vs PURE_GRUMBLE: \"방어 빼면 원인 사실이 남는가?\" 남으면 YELLOW, 없으면 RED\n"
+    "- ① \"삭제해도 핵심 용건이 전달되고, 수신자에게 유용한 정보가 없는가?\" → YES이면 RED 후보\n"
+    "- ② \"개인 건강/가정사/직무 피로인가, 사실 없이 불만/체념만인가?\" → YES이면 RED 확정\n\n"
     "RED 패턴 미해당 시:\n"
     "- 구체적 정보가치(원인/수치/행동 지침 등) 있음 → YELLOW\n"
     "- 정보가치 없음(넋두리/TMI/불필요한 반복) → RED\n\n"
     "### 4단계: 라벨 선택\n"
     "GREEN/YELLOW/RED 각 라벨 중 가장 적합한 것 선택\n\n"
-    "## 오분류 방지 — 표면 vs 실제 기능\n\n"
-    "판단 기준: 세그먼트의 **표면 형태**가 아니라 **실제 기능**에 따라 분류.\n"
-    "다음은 자주 GREEN으로 오분류되는 패턴입니다:\n"
-    "- 요청 형태의 지시: \"좀 해주세요\"류 — 실제로 상대 행동을 판단/지시하면 YELLOW(NEGATIVE_FEEDBACK)\n"
-    "- 사실 형태의 자기변호: 사실을 나열하지만 실제 기능이 자기변호/책임전가 → YELLOW(SELF_JUSTIFICATION/ACCOUNTABILITY)\n"
-    "- 인사/사과 형태의 비꼼: 빈정·비꼼이면 → EMOTIONAL 또는 AGGRESSION(RED)\n"
-    "- 사과 형태의 변명: 실제로는 변명/책임회피 → YELLOW(SELF_JUSTIFICATION)\n"
-    "- \"~때문에\" 구조: 외부 귀책+불만 결합이면 YELLOW(ACCOUNTABILITY)\n"
-    "- 장황한 설명: 핵심 사실 1개 + 동일 내용 반복 2~3개면 반복 부분은 YELLOW(EXCESS_DETAIL)\n"
-    "- 감정 간접 표출: \"좀 그런 것 같다\" — 간접이라도 감정이면 YELLOW(EMOTIONAL)\n"
-    "- 방어적 원인 설명: 원인이 객관적이어도 \"~이라서 어쩔 수 없었다\" 구조면 YELLOW(SELF_JUSTIFICATION)\n"
-    "- \"이미 했다\" 구조: \"매뉴얼에도 써놨고요\", \"이미 한 상태임\", \"이미 말씀드렸는데\", "
-    "\"~라고 알려드렸는데\" — 사전 조치 강조 = 자기변호 구조 → YELLOW(SELF_JUSTIFICATION). "
-    "CORE_FACT는 객관적 사실 전달이며, \"이미 ~했다\"는 방어적 맥락이 있을 때 제외\n\n"
     "## 예시 1\n\n"
     "받는 사람: 직장 상사\n\n"
     "[세그먼트]\n"
@@ -242,17 +219,37 @@ SYSTEM_PROMPT = (
     "T3|PERSONAL_ATTACK\n"
     "T4|CORE_INTENT\n"
     "T5|REQUEST\n\n"
+    "## 예시 4 (전체 GREEN)\n\n"
+    "[세그먼트]\n"
+    "T1: 안녕하세요\n"
+    "T2: 회의 자료 검토 부탁드립니다\n"
+    "T3: {{DATE_1}}까지 피드백 주시면 감사하겠습니다\n\n"
+    "[정답]\n"
+    "T1|COURTESY\n"
+    "T2|REQUEST\n"
+    "T3|REQUEST\n\n"
+    "## 예시 5 (EMOTIONAL 포함)\n\n"
+    "받는 사람: 동료\n\n"
+    "[세그먼트]\n"
+    "T1: 이번 프로젝트 일정 공유드립니다\n"
+    "T2: 솔직히 제가 다 책임져야 하는 분위기라 좀 억울합니다\n"
+    "T3: 이게 말이 되냐 진짜\n"
+    "T4: 리소스 추가 배정 검토 부탁드립니다\n\n"
+    "[정답]\n"
+    "T1|CORE_FACT\n"
+    "T2|EMOTIONAL\n"
+    "T3|PURE_GRUMBLE\n"
+    "T4|REQUEST\n\n"
     "선택사항(마지막 줄): SUMMARY: 핵심 용건을 1-2문장으로 요약\n\n"
     "## 필수 규칙\n"
+    "- **{{TYPE_N}} 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}}) 수정 금지.** 그대로 유지하세요.\n"
     "- **모든 세그먼트에 반드시 라벨을 부여하세요.** 빠뜨리는 세그먼트가 없어야 합니다.\n"
     "- **RED는 극도로 보수적으로.** RED 판단 전 반드시 자문: "
     "\"이걸 통째로 삭제해도 메시지가 여전히 이해되는가?\"\n"
     "- **GREEN vs YELLOW 핵심**: 하드 트리거 1개+ 또는 소프트 트리거 2개+ → YELLOW. "
     "표면 형태에 속지 말고 실제 기능으로 판단.\n"
-    "- **수신자 관점 필수 체크**: persona의 입장에서, 관계 경계 침범 여부 확인.\n"
-    "- **YELLOW 라벨 선택**: 5개 YELLOW 라벨 중 재작성 전략이 가장 적합한 것 선택.\n"
-    "- RED 전 반드시 자문: \"이걸 통째로 삭제하면 메시지가 여전히 이해되는가?\"\n\n"
-    "금지: {{TYPE_N}} 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}}) 수정"
+    "- **수신자 관점 필수 체크**: 수신자 입장에서, 관계 경계 침범 여부 확인.\n"
+    "- **YELLOW 라벨 선택**: 5개 YELLOW 라벨 중 재작성 전략이 가장 적합한 것 선택."
 )
 
 
@@ -334,7 +331,7 @@ async def label_text_only(
 
         from app.pipeline.labeling import yellow_trigger_scanner
 
-        upgrades = yellow_trigger_scanner.scan_yellow_triggers(segments, labeled, None)
+        upgrades = yellow_trigger_scanner.scan_yellow_triggers(segments, labeled)
         if upgrades:
             logger.info(
                 "[StructureLabel] Text-only yellow scanner recovered %d segment(s): %s",
@@ -385,171 +382,8 @@ async def label_text_only(
     return StructureLabelResult(labeled, summary, total_prompt, total_completion)
 
 
-async def label(
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
-    user_prompt: str | None,
-    sender_info: str | None,
-    segments: list[Segment],
-    masked_text: str,
-    ai_call_fn,
-) -> StructureLabelResult:
-    """Label segments using LLM.
-
-    Args:
-        ai_call_fn: async function(model, system, user, temp, max_tokens, analysis_context) -> LlmCallResult
-    """
-    user_message = _build_user_message(persona, contexts, tone_level, user_prompt, sender_info, segments, masked_text)
-
-    result: LlmCallResult = await ai_call_fn(
-        PRIMARY_MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,
-        thinking_budget=THINKING_BUDGET,
-    )
-
-    logger.debug("[StructureLabel] Raw LLM response:\n%s", result.content)
-
-    labeled = _parse_output(result.content, masked_text, segments)
-    summary = _parse_summary(result.content)
-
-    total_prompt = result.prompt_tokens
-    total_completion = result.completion_tokens
-
-    # Validate coverage
-    if not _validate_result(labeled, masked_text, segments):
-        labeled_ids = {ls.segment_id for ls in labeled}
-        missing_ids = [seg.id for seg in segments if seg.id not in labeled_ids]
-
-        logger.warning(
-            "[StructureLabel] Validation failed (parsed %d of %d labels, missing: %s), retrying once",
-            len(labeled), len(segments), missing_ids,
-        )
-        retry_message = (
-            user_message
-            + "\n\n[시스템 경고] 이전 응답에서 다음 세그먼트의 라벨이 누락되었습니다: "
-            + ", ".join(missing_ids)
-            + ". 모든 세그먼트에 라벨을 부여해주세요. "
-            "반드시 SEG_ID|LABEL 형식으로 줄마다 출력하세요. "
-            "코드블록이나 설명 없이 바로 출력하세요."
-        )
-        retry_result: LlmCallResult = await ai_call_fn(
-            PRIMARY_MODEL, SYSTEM_PROMPT, retry_message, TEMPERATURE, MAX_TOKENS, None,
-            thinking_budget=THINKING_BUDGET,
-        )
-
-        logger.debug("[StructureLabel] Retry raw LLM response:\n%s", retry_result.content)
-
-        retry_labeled = _parse_output(retry_result.content, masked_text, segments)
-        retry_summary = _parse_summary(retry_result.content)
-        total_prompt += retry_result.prompt_tokens
-        total_completion += retry_result.completion_tokens
-
-        if retry_labeled:
-            retry_labeled = _fill_missing_labels(retry_labeled, segments)
-            return StructureLabelResult(retry_labeled, retry_summary, total_prompt, total_completion)
-
-        # Both attempts failed — fallback: label all as COURTESY
-        logger.warning(
-            "[StructureLabel] Both attempts failed, falling back to all-COURTESY labels for %d segments",
-            len(segments),
-        )
-        fallback = [
-            LabeledSegment(seg.id, SegmentLabel.COURTESY, seg.text, seg.start, seg.end)
-            for seg in segments
-        ]
-        return StructureLabelResult(fallback, retry_summary, total_prompt, total_completion)
-
-    # All-GREEN 3-level response
-    if len(segments) >= 4 and _is_all_green(labeled):
-        logger.warning(
-            "[StructureLabel] All %d segments labeled GREEN with %d+ segments — trying yellow scanner first",
-            len(labeled), len(segments),
-        )
-
-        # 1) Try server-side yellow trigger scanner before LLM retry
-        from app.pipeline.labeling import yellow_trigger_scanner
-
-        upgrades = yellow_trigger_scanner.scan_yellow_triggers(segments, labeled, persona)
-        if upgrades:
-            logger.info(
-                "[StructureLabel] Yellow scanner recovered %d segment(s): %s",
-                len(upgrades),
-                [(u.segment_id, u.new_label.name, u.score) for u in upgrades],
-            )
-            upgraded_map = {u.segment_id: u.new_label for u in upgrades}
-            upgraded_labeled = [
-                LabeledSegment(ls.segment_id, upgraded_map[ls.segment_id], ls.text, ls.start, ls.end)
-                if ls.segment_id in upgraded_map else ls
-                for ls in labeled
-            ]
-            upgraded_labeled = _fill_missing_labels(upgraded_labeled, segments)
-            return StructureLabelResult(
-                upgraded_labeled, summary, total_prompt, total_completion,
-                yellow_recovery_applied=True,
-                yellow_upgrade_count=len(upgrades),
-            )
-
-        # 2) Scanner found nothing — fall back to gpt-4o-mini (model diversity)
-        logger.info(
-            "[StructureLabel] Yellow scanner found no triggers — falling back to FALLBACK_MODEL (%s)",
-            FALLBACK_MODEL,
-        )
-        fallback_result: LlmCallResult = await ai_call_fn(
-            FALLBACK_MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,
-        )
-
-        logger.debug("[StructureLabel] Fallback model response:\n%s", fallback_result.content)
-
-        fallback_labeled = _parse_output(fallback_result.content, masked_text, segments)
-        fallback_summary = _parse_summary(fallback_result.content)
-        total_prompt += fallback_result.prompt_tokens
-        total_completion += fallback_result.completion_tokens
-
-        if fallback_labeled:
-            has_non_green = any(s.label.tier != SegmentLabelTier.GREEN for s in fallback_labeled)
-            if has_non_green:
-                fallback_labeled = _fill_missing_from_original(fallback_labeled, labeled, segments)
-                return StructureLabelResult(
-                    fallback_labeled,
-                    fallback_summary if fallback_summary else summary,
-                    total_prompt, total_completion,
-                )
-        logger.info("[StructureLabel] Fallback model also all-GREEN — accepting original result")
-
-    # Fill any missing segments with COURTESY default
-    labeled = _fill_missing_labels(labeled, segments)
-
-    return StructureLabelResult(labeled, summary, total_prompt, total_completion)
-
-
 def _is_all_green(labeled: list[LabeledSegment]) -> bool:
     return all(s.label.tier == SegmentLabelTier.GREEN for s in labeled)
-
-
-def _build_user_message(
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
-    user_prompt: str | None,
-    sender_info: str | None,
-    segments: list[Segment],
-    masked_text: str,
-) -> str:
-    parts: list[str] = []
-    parts.append(f"받는 사람: {prompt_builder.get_persona_label(persona)}")
-    parts.append(f"상황: {', '.join(prompt_builder.get_context_label(ctx) for ctx in contexts)}")
-    parts.append(f"말투 강도: {prompt_builder.get_tone_label(tone_level)}")
-    if sender_info and sender_info.strip():
-        parts.append(f"보내는 사람: {sender_info}")
-    if user_prompt and user_prompt.strip():
-        parts.append(f"참고 맥락: {user_prompt}")
-
-    parts.append("\n[서버 세그먼트]")
-    for seg in segments:
-        parts.append(f"{seg.id}: {seg.text}")
-
-    parts.append(f"\n[마스킹된 원문]\n{masked_text}")
-    return "\n".join(parts)
 
 
 _ENTRY_PATTERN = re.compile(r"\*\*")

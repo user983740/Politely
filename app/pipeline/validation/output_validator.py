@@ -8,7 +8,6 @@ import re
 
 from app.models.domain import LabeledSegment, LockedSpan, ValidationIssue, ValidationResult
 from app.models.enums import (
-    Persona,
     SegmentLabel,
     Severity,
     ValidationIssueType,
@@ -142,7 +141,6 @@ def validate(
     original_text: str,
     spans: list[LockedSpan] | None,
     raw_llm_output: str | None,
-    persona: Persona,
     redaction_map: dict[str, str] | None = None,
     yellow_segment_texts: list[str] | None = None,
 ) -> ValidationResult:
@@ -159,7 +157,7 @@ def validate(
     _check_hallucinated_facts(final_text, original_text, spans, issues)
     _check_ending_repetition(final_text, issues)
     _check_length_overexpansion(final_text, original_text, issues)
-    _check_perspective_error(final_text, persona, issues)
+    _check_perspective_error(final_text, issues)
     _check_locked_span_missing(raw_llm_output, final_text, spans, issues)
     _check_redacted_reentry(final_text, raw_llm_output, redaction_map, issues)
     _check_core_number_missing(final_text, original_text, spans, issues)
@@ -185,7 +183,6 @@ def validate_with_template(
     original_text: str,
     spans: list[LockedSpan] | None,
     raw_llm_output: str | None,
-    persona: Persona,
     redaction_map: dict[str, str] | None,
     yellow_segment_texts: list[str] | None,
     template: StructureTemplate | None,
@@ -195,7 +192,7 @@ def validate_with_template(
     """Validate with template-aware S2 presence check."""
     base_result = validate(
         final_text, original_text, spans, raw_llm_output,
-        persona, redaction_map, yellow_segment_texts,
+        redaction_map, yellow_segment_texts,
     )
 
     all_issues = list(base_result.issues)
@@ -342,16 +339,13 @@ def _check_length_overexpansion(output: str, original_text: str, issues: list[Va
         ))
 
 
-def _check_perspective_error(output: str, persona: Persona, issues: list[ValidationIssue]) -> None:
-    if persona in (Persona.CLIENT, Persona.OFFICIAL):
-        return
-
+def _check_perspective_error(output: str, issues: list[ValidationIssue]) -> None:
     for phrase in _PERSPECTIVE_PHRASES:
         if phrase in output:
             issues.append(ValidationIssue(
                 type=ValidationIssueType.PERSPECTIVE_ERROR,
                 severity=Severity.WARNING,
-                message=f'관점 오류 힌트: "{phrase}" (받는 사람이 {persona}일 때 부적절)',
+                message=f'관점 오류 힌트: "{phrase}" (화자 관점 부적절)',
                 matched_text=phrase,
             ))
 

@@ -1,13 +1,13 @@
 """Multi-model pipeline orchestrator (v2).
 
 Pipeline:
-  [parallel: SituationAnalysis+MetadataCheck (LLM) + A→G pipeline]
+  [parallel: SituationAnalysis (LLM) + A→G pipeline]
   A) normalize → B) extract+mask (enhanced regex)
   → E?) identityBooster (gating)
   → C) segment (server) → C') refine long segments (LLM, conditional)
   → D) structureLabel (LLM #1) → D') RED enforce
-  → join SituationAnalysis → filterRedFacts → metadata override
-  → Template Select (with corrected metadata)
+  → join SituationAnalysis → filterRedFacts
+  → Template Select
   → G) redact (server)
   → H) Final LLM #2 → I) unmask → validate → (ERROR: 1 retry)
 
@@ -32,11 +32,8 @@ from app.models.domain import (
 )
 from app.models.enums import (
     LockedSpanType,
-    Persona,
     Purpose,
     SegmentLabelTier,
-    SituationContext,
-    ToneLevel,
     Topic,
     ValidationIssueType,
 )
@@ -211,9 +208,6 @@ def compute_thinking_budget(
 
 
 async def execute_analysis(
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
     original_text: str,
     user_prompt: str | None,
     sender_info: str | None,
@@ -271,24 +265,23 @@ async def execute_analysis(
     metadata_overridden = False
 
     # Launch Situation Analysis async (runs in parallel with the rest)
-    should_fire_situation = gating_condition_evaluator.should_fire_situation_analysis(persona, masked)
+    should_fire_situation = gating_condition_evaluator.should_fire_situation_analysis(masked)
     situation_task: asyncio.Task | None = None
     if should_fire_situation:
         situation_task = asyncio.create_task(
-            situation_analysis_service.analyze(
-                persona, contexts, tone_level, masked, user_prompt, sender_info, ai_call_fn,
-                topic=topic, purpose=purpose,
+            situation_analysis_service.analyze_text_only(
+                masked, sender_info, ai_call_fn, user_prompt=user_prompt,
             )
         )
 
     # E?) Identity Booster — launch async (does not block segmentation)
     booster_task: asyncio.Task | None = None
     if gating_condition_evaluator.should_fire_identity_booster(
-        identity_booster_toggle, persona, regex_spans, len(normalized),
+        identity_booster_toggle, regex_spans, len(normalized),
     ):
         await callback.on_phase("identity_boosting")
         booster_task = asyncio.create_task(
-            identity_lock_booster.boost(persona, normalized, regex_spans, masked, ai_call_fn)
+            identity_lock_booster.boost(normalized, regex_spans, masked, ai_call_fn)
         )
     else:
         await callback.on_phase("identity_skipped")
@@ -310,9 +303,7 @@ async def execute_analysis(
 
     # D) Structure Label (LLM #1)
     await callback.on_phase("labeling")
-    label_result = await structure_label_service.label(
-        persona, contexts, tone_level, user_prompt, sender_info, segments, masked, ai_call_fn,
-    )
+    label_result = await structure_label_service.label_text_only(segments, masked, ai_call_fn)
     total_prompt_tokens += label_result.prompt_tokens
     total_completion_tokens += label_result.completion_tokens
 
@@ -359,33 +350,13 @@ async def execute_analysis(
         await callback.on_phase("situation_skipped")
         await callback.on_situation_analysis(False, None)
 
-    # Apply metadata override from SA if threshold met
+    # Template Selection
     effective_topic = topic
     effective_purpose = purpose
-    effective_contexts = contexts
-    if (
-        situation_result is not None
-        and situation_result.metadata_check is not None
-        and situation_result.metadata_check.meets_threshold()
-    ):
-        mc = situation_result.metadata_check
-        if mc.inferred_topic:
-            effective_topic = mc.inferred_topic
-        if mc.inferred_purpose:
-            effective_purpose = mc.inferred_purpose
-        if mc.inferred_primary_context:
-            effective_contexts = [mc.inferred_primary_context]
-        metadata_overridden = True
-        logger.info(
-            "[Pipeline] SA metadata override: topic=%s, purpose=%s, context=%s (confidence=%.2f)",
-            effective_topic, effective_purpose, effective_contexts, mc.confidence,
-        )
-
-    # Template Selection (using potentially corrected metadata)
     await callback.on_phase("template_selecting")
     label_stats = LabelStats.from_segments(enforced_labels)
     template_result = template_selector.select_template(
-        registry, persona, effective_contexts, effective_topic, effective_purpose, label_stats, masked,
+        registry, effective_topic, effective_purpose, label_stats, masked,
     )
     chosen_template = template_result.template
     effective_sections = template_result.effective_sections
@@ -434,9 +405,6 @@ async def execute_analysis(
 
 def build_final_prompt(
     analysis: AnalysisPhaseResult,
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
     sender_info: str | None,
     rag_results=None,
 ) -> FinalPromptPair:
@@ -479,11 +447,11 @@ def build_final_prompt(
         ))
 
     final_system = prompt_builder_final.build_final_system_prompt(
-        persona, contexts, tone_level, analysis.chosen_template, analysis.effective_sections,
+        analysis.chosen_template, analysis.effective_sections,
         rag_results=rag_results,
     )
     final_user = prompt_builder_final.build_final_user_message(
-        persona, contexts, tone_level, sender_info,
+        sender_info,
         ordered_segments, analysis.locked_spans,
         analysis.situation_analysis, analysis.summary_text,
         analysis.chosen_template, analysis.effective_sections,
@@ -501,9 +469,6 @@ def build_final_prompt(
 async def execute_final(
     final_model_name: str,
     analysis: AnalysisPhaseResult,
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
     original_text: str,
     sender_info: str | None,
     max_tokens: int,
@@ -520,7 +485,7 @@ async def execute_final(
     start_time = time.monotonic()
 
     prompt = build_final_prompt(
-        analysis, persona, contexts, tone_level, sender_info, rag_results=rag_results,
+        analysis, sender_info, rag_results=rag_results,
     )
 
     # Extract YELLOW segment texts for Rule 11
@@ -545,7 +510,7 @@ async def execute_final(
     # Validate (with template info)
     validation = output_validator.validate_with_template(
         unmask_result.text, original_text, prompt.locked_spans,
-        final_result.content, persona, prompt.redaction_map, yellow_texts,
+        final_result.content, prompt.redaction_map, yellow_texts,
         analysis.chosen_template, analysis.effective_sections, analysis.labeled_segments,
     )
 
@@ -599,7 +564,7 @@ async def execute_final(
         retry_unmask = locked_span_masker.unmask(retry_result.content, prompt.locked_spans)
         validation = output_validator.validate_with_template(
             retry_unmask.text, original_text, prompt.locked_spans,
-            retry_result.content, persona, prompt.redaction_map, yellow_texts,
+            retry_result.content, prompt.redaction_map, yellow_texts,
             analysis.chosen_template, analysis.effective_sections, analysis.labeled_segments,
         )
         unmask_result = retry_unmask

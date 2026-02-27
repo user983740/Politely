@@ -9,8 +9,7 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 from app.models.domain import LlmCallResult, LockedSpan
-from app.models.enums import LockedSpanType, Persona
-from app.pipeline import prompt_builder
+from app.models.enums import LockedSpanType
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,13 @@ SYSTEM_PROMPT = (
     "- 누구나 쓸 수 있는 범용 단어\n\n"
     '기준: "이 단어를 다른 말로 바꾸면 지칭 대상이 달라지는가?" → Yes만 추출.\n\n'
     '변경 불가 표현을 한 줄에 하나씩, "- " 접두사로 작성하세요.\n'
-    "예: - 김민수\n"
+    "예:\n"
+    "- 김민수\n"
+    "- report_final.xlsx\n"
+    "- ㈜한빛소프트\n\n"
+    "예시 (추출 없음):\n"
+    "원문: 내일까지 보고서 제출 부탁드립니다\n"
+    "출력: 없음\n\n"
     '변경 불가 표현이 없으면 "없음"이라고만 작성하세요.'
 )
 
@@ -48,7 +53,6 @@ class BoosterResult:
 
 
 async def boost(
-    persona: Persona,
     normalized_text: str,
     current_spans: list[LockedSpan],
     masked_text: str,
@@ -59,7 +63,7 @@ async def boost(
     Args:
         ai_call_fn: async function(model, system, user, temp, max_tokens, analysis_context) -> LlmCallResult
     """
-    user_message = f"받는 사람: {prompt_builder.get_persona_label(persona)}\n\n원문:\n{masked_text}"
+    user_message = f"원문:\n{masked_text}"
 
     result: LlmCallResult = await ai_call_fn(
         MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,

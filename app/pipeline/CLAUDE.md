@@ -14,7 +14,6 @@ Multi-model AI pipeline: preprocessing → segmentation → labeling → situati
 | MultiModelPromptBuilder | `multi_model_prompt_builder.py` | Final model prompts — JSON segment format, dedupeKey, mustInclude, template sections, FINAL_CORE_SYSTEM_PROMPT (~3000 tokens) |
 | AiStreamingService | `ai_streaming_service.py` | SSE streaming — `stream_text_only()` (default) + legacy `stream_transform()`, async generators yielding 16 event types via asyncio.Queue |
 | CacheMetricsTracker | `cache_metrics_tracker.py` | Token cache tracking — prompt/cached token counters with cumulative hit rate |
-| PromptBuilder | `prompt_builder.py` | Intermediate prompts (labeling, gating) — Korean labels, dynamic persona/context/tone blocks |
 | TextNormalizer | `preprocessing/text_normalizer.py` | 7-step text preprocessing |
 | LockedSpanExtractor | `preprocessing/locked_span_extractor.py` | Regex-based extraction of 17 span types |
 | LockedSpanMasker | `preprocessing/locked_span_masker.py` | Mask spans to `{{TYPE_N}}` placeholders, unmask after LLM call |
@@ -24,8 +23,8 @@ Multi-model AI pipeline: preprocessing → segmentation → labeling → situati
 | YellowTriggerScanner | `labeling/yellow_trigger_scanner.py` | Server-side regex scanner for all-GREEN recovery — 4 pattern categories, score threshold, max 2 upgrades. Runs before LLM diversity retry |
 | RedLabelEnforcer | `labeling/red_label_enforcer.py` | Server-side RED enforcement — profanity→AGGRESSION, ability denial→PERSONAL_ATTACK, soft profanity→GREEN→YELLOW |
 | RedactionService | `redaction/redaction_service.py` | RED/YELLOW counting + redactionMap (no processedText assembly) |
-| TemplateRegistry | `template/template_registry.py` | 12 templates (T01-T12) with section orders and persona skip rules |
-| TemplateSelector | `template/template_selector.py` | PURPOSE→CONTEXT→keyword selection, S2 enforcement, persona skip rules |
+| TemplateRegistry | `template/template_registry.py` | 12 templates (T01-T12) with section orders |
+| TemplateSelector | `template/template_selector.py` | PURPOSE→keyword selection, S2 enforcement |
 | StructureTemplate | `template/structure_template.py` | Template model: StructureSection dataclass + StructureTemplate dataclass |
 | GatingConditionEvaluator | `gating/gating_condition_evaluator.py` | Evaluates conditions for IdentityBooster / SituationAnalysis |
 | IdentityLockBooster | `gating/identity_lock_booster.py` | Optional LLM: semantic locked span extraction (span-only, runs parallel with segmentation/labeling) |
@@ -36,27 +35,27 @@ Multi-model AI pipeline: preprocessing → segmentation → labeling → situati
 ## Complete Data Flow
 
 ```
-1. INPUT: persona, contexts[], tone_level, original_text, user_prompt?, sender_info?, topic?, purpose?
+1. INPUT: original_text, user_prompt?, sender_info?, topic?, purpose?
 
 2. PREPROCESSING
    ├─ TextNormalizer.normalize(original_text) → normalized (7-step Unicode cleanup)
    ├─ LockedSpanExtractor.extract(normalized) → regex_spans (17 types, overlap-resolved)
    └─ LockedSpanMasker.mask(normalized, regex_spans) → masked_text
 
-3. PARALLEL: SituationAnalysis + MetadataCheck (always-on)
-   └─ analyze(persona, contexts, tone, masked_text, user_prompt, sender_info, topic, purpose)
-      → facts[] (max 5, with source quotes), intent, metadata_check
+3. PARALLEL: SituationAnalysis (always-on)
+   └─ analyze_text_only(masked_text, sender_info, ai_call_fn, user_prompt)
+      → facts[] (max 5, with source quotes), intent
 
 4. PARALLEL LAUNCH: IdentityBooster (async, non-blocking)
-   ├─ should_fire: toggle=true OR (BOSS/CLIENT/OFFICIAL AND spans≤1 AND text≥80chars)
-   └─ boost(persona, normalized, existing_spans, masked) → extra_spans (SEMANTIC only)
+   ├─ should_fire: toggle=true (frontend toggle only)
+   └─ boost(normalized, existing_spans, masked) → extra_spans (SEMANTIC only)
 
 5. SEGMENTATION (uses regex-only masked_text, not blocked by booster)
    ├─ MeaningSegmenter.segment(masked_text) → segments[] (7-stage hierarchical)
    └─ LlmSegmentRefiner.refine(segments) → refined[] (optional, >30 char segments)
 
 6. LABELING
-   ├─ StructureLabelService.label(...) → labeled_segments[] (LLM, 14 labels)
+   ├─ StructureLabelService.label_text_only(...) → labeled_segments[] (LLM, 14 labels)
    │   └─ all-GREEN recovery: yellow_trigger_scanner first → LLM diversity retry fallback
    └─ RedLabelEnforcer.enforce(labeled) → enforced[] (server-side RED overrides)
 
@@ -69,7 +68,7 @@ Multi-model AI pipeline: preprocessing → segmentation → labeling → situati
    └─ If metadata_check.meets_threshold(): apply inferred topic/purpose/context
 
 8. TEMPLATE SELECTION (with corrected metadata)
-   ├─ TemplateSelector.select(contexts, topic, purpose, label_stats) → template + effective_sections
+   ├─ TemplateSelector.select(topic, purpose, label_stats, masked_text) → template + effective_sections
    └─ S2 enforcement (if ACCOUNTABILITY or NEGATIVE_FEEDBACK present)
 
 9. REDACTION
@@ -85,13 +84,12 @@ Multi-model AI pipeline: preprocessing → segmentation → labeling → situati
     └─ On failure: try/except → continue without cushion (pipeline never breaks)
 
 9b. RAG RETRIEVAL (optional, if RAG_ENABLED=true)
-    ├─ _retrieve_rag(original_text, analysis, persona, contexts, tone_level)
-    ├─ Build unified query: original_text + SA.intent + persona + contexts
+    ├─ _retrieve_rag(original_text, analysis)
+    ├─ Build unified query: original_text + SA.intent
     ├─ embed_text(query) → 1536-dim vector (1 OpenAI API call)
-    ├─ rag_index.search() → RagResults (6 categories, metadata pre-filter + cosine + MMR)
+    ├─ rag_index.search() → RagResults (6 categories, cosine + MMR)
     │   expression_pool → section filter, cushion → yellow_label filter
-    │   forbidden → vector + trigger_phrases substring, policy → context filter
-    │   example → persona+context filter, domain_context → context filter
+    │   forbidden → vector + trigger_phrases substring
     └─ On failure: try/except → continue without RAG (pipeline never breaks)
 
 10. FINAL PROMPT BUILDING (MultiModelPromptBuilder / TextOnlyPipeline)
@@ -216,7 +214,7 @@ Extraction order (priority, longer match wins on overlap):
 - **Output format:** `SEG_ID|LABEL` (one per line)
 - **Validation:** MIN_COVERAGE = 0.6 (at least 60% segments labeled), must have at least one CORE_FACT/CORE_INTENT/REQUEST
 - **Hard triggers** (1+ → force YELLOW): direct judgment of recipient, blame + generalization (매번/맨날/항상), emotional outburst (답답하다, 화가 난다), defensive structure
-- **Soft triggers** (2+ → force YELLOW): external blame + recipient fault, indirect emotion, speculation (아마, ~것 같다), content repetition, persona-context combos
+- **Soft triggers** (2+ → force YELLOW): external blame + recipient fault, indirect emotion, speculation (아마, ~것 같다), content repetition
 - **Migration map** (old 8 labels → new 5): ACCOUNTABILITY_FACT/JUDGMENT → ACCOUNTABILITY, SELF_CONTEXT/DEFENSIVE → SELF_JUSTIFICATION, SPECULATION/OVER_EXPLANATION → EXCESS_DETAIL
 - **All-GREEN recovery (4+ segments):** 1) YellowTriggerScanner regex scan (0 LLM calls) → if upgrades found, apply and skip LLM retry; 2) fallback to gpt-4o-mini plain call (model diversity)
 - **YellowTriggerScanner:** 4 categories (blame+generalization, emotion, speculation, defense), strong (+2) / soft (+1) scoring, SCORE_THRESHOLD=2, MAX_UPGRADES=2, GREEN segments only
@@ -253,29 +251,28 @@ Each section has expression_pool examples (e.g., S2: "내부 확인 결과", "�
 
 ### 12 Templates (T01-T12)
 
-| ID | Name | Sections | Selection Trigger | Persona Rules |
-|----|------|----------|-------------------|---------------|
-| T01 | 일반 전달 (General) | S0,S1,S3,S5,S6,S8 | Default; PURPOSE=INFO_DELIVERY/NEXT_ACTION_CONFIRM | BOSS/PROF/OFF: shorten S1 |
-| T02 | 자료 요청 (Data Request) | S0,S1,S3,S5,S8 | PURPOSE=DATA_REQUEST; CONTEXT=REQUEST | BOSS/PROF/OFF: shorten S1 |
-| T03 | 독촉 (Nagging) | S0,S1,S3,S5,S8 | CONTEXT=URGING | All: shorten S1 |
-| T04 | 일정 조율 (Schedule) | S0,S1,S3,S4,S6,S8 | PURPOSE=SCHEDULE_COORDINATION; CONTEXT=SCHEDULE_DELAY | PARENT: expand S1 |
-| T05 | 사과/수습 (Apology) | S0,S1,S2,S3,S6,S8 | PURPOSE=APOLOGY_RECOVERY; CONTEXT=APOLOGY/SUPPORT | CLIENT: expand S1,S2 |
-| T06 | 거절/불가 (Rejection) | S0,S1,S7,S3,S6,S8 | PURPOSE=REJECTION_NOTICE; CONTEXT=REJECTION/CONTRACT | CLIENT: expand S1,S2 |
-| T07 | 공지/안내 (Announcement) | S0,S3,S5,S8 | PURPOSE=ANNOUNCEMENT; CONTEXT=ANNOUNCEMENT | (none) |
-| T08 | 피드백 (Feedback) | S0,S1,S3,S5,S6,S8 | CONTEXT=FEEDBACK | PARENT: expand S1 |
-| T09 | 책임 분리 (Blame Separation) | S0,S1,S2,S3,S4,S6,S8 | CONTEXT=COMPLAINT/BILLING/CIVIL_COMPLAINT | CLIENT: expand S1,S2 |
-| T10 | 관계 회복 (Relationship) | S0,S1,S3,S6,S8 | PURPOSE=RELATIONSHIP_RECOVERY; CONTEXT=GRATITUDE | PARENT: expand S1 |
-| T11 | 환불 거절 (Refund Rejection) | S0,S1,S2,S3,S7,S6,S8 | PURPOSE=REFUND_REJECTION; refund keyword + topic override | CLIENT: expand S1,S2 |
-| T12 | 경고/방지 (Warning) | S0,S1,S3,S5,S6,S8 | PURPOSE=WARNING_PREVENTION | BOSS/PROF/OFF: shorten S1 |
+| ID | Name | Sections | Selection Trigger |
+|----|------|----------|-------------------|
+| T01 | 일반 전달 (General) | S0,S1,S3,S5,S6,S8 | Default; PURPOSE=INFO_DELIVERY/NEXT_ACTION_CONFIRM |
+| T02 | 자료 요청 (Data Request) | S0,S1,S3,S5,S8 | PURPOSE=DATA_REQUEST |
+| T03 | 독촉 (Nagging) | S0,S1,S3,S5,S8 | (unused — no CONTEXT selection) |
+| T04 | 일정 조율 (Schedule) | S0,S1,S3,S4,S6,S8 | PURPOSE=SCHEDULE_COORDINATION |
+| T05 | 사과/수습 (Apology) | S0,S1,S2,S3,S6,S8 | PURPOSE=APOLOGY_RECOVERY |
+| T06 | 거절/불가 (Rejection) | S0,S1,S7,S3,S6,S8 | PURPOSE=REJECTION_NOTICE |
+| T07 | 공지/안내 (Announcement) | S0,S3,S5,S8 | PURPOSE=ANNOUNCEMENT |
+| T08 | 피드백 (Feedback) | S0,S1,S3,S5,S6,S8 | (unused — no CONTEXT selection) |
+| T09 | 책임 분리 (Blame Separation) | S0,S1,S2,S3,S4,S6,S8 | PURPOSE=RESPONSIBILITY_SEPARATION |
+| T10 | 관계 회복 (Relationship) | S0,S1,S3,S6,S8 | PURPOSE=RELATIONSHIP_RECOVERY |
+| T11 | 환불 거절 (Refund Rejection) | S0,S1,S2,S3,S7,S6,S8 | PURPOSE=REFUND_REJECTION; refund keyword + topic override |
+| T12 | 경고/방지 (Warning) | S0,S1,S3,S5,S6,S8 | PURPOSE=WARNING_PREVENTION |
 
 ### Template Selection Logic (priority order)
 
 1. **PURPOSE → direct template mapping** (highest priority)
-2. **Primary CONTEXT → mapping** (first context in list)
+2. **Default → T01_GENERAL** (no CONTEXT-based selection)
 3. **Topic override** (REFUND_CANCEL + rejection-like → T11)
 4. **Keyword override** (refund keywords + NEGATIVE_FEEDBACK → T11)
 5. **S2 enforcement** (ACCOUNTABILITY or NEGATIVE_FEEDBACK → inject S2 if missing)
-6. **Persona skip rules** (remove/shorten/expand sections per persona)
 
 ## Gating (Conditional LLM Calls)
 
@@ -283,7 +280,7 @@ Each section has expression_pool examples (e.g., S2: "내부 확인 결과", "�
 
 | Gate | Condition | Always? |
 |------|-----------|---------|
-| IdentityBooster | toggle=true OR (BOSS/CLIENT/OFFICIAL AND spans≤1 AND text≥80 chars) | No |
+| IdentityBooster | toggle=true (frontend toggle only) | No |
 | SituationAnalysis | Always True | Yes |
 
 ### SituationAnalysisService (Always-on, with integrated metadata validation)
@@ -332,20 +329,16 @@ class OrderedSegment:
 
 ### System Prompt Structure (~3000 tokens)
 
-1. **FINAL_CORE_SYSTEM_PROMPT:** Role (Korean communication expert), input format (JSON meta + segments + placeholders), placeholder rules (MUST preserve {{TYPE_N}}), **output rules (text only, no meta/emoji)**, **forbidden AI phrases**, **naturalness rules**, 3-tier processing rules (GREEN: preserve content rewrite expression; YELLOW: preserve meaning rewrite + cushion; RED: delete, no inference), deduplication rules, connector freedom, core principles
-2. **Dynamic persona block** (~50 tokens) — per-persona tone/style guidance + YELLOW cushion phrase
-3. **Dynamic context block** (~30 tokens per context) — context-specific rewriting guidance
-4. **Dynamic tone level block** — NEUTRAL/POLITE/VERY_POLITE style rules
-5. **Template section block** — per-section guidance (label, instruction, length_hint, expression_pool)
+1. **FINAL_CORE_SYSTEM_PROMPT:** Role (Korean communication expert), input format (JSON meta + segments + placeholders), placeholder rules (MUST preserve {{TYPE_N}}), **output rules (text only, no meta/emoji)**, **forbidden AI phrases**, **naturalness rules**, 3-tier processing rules (GREEN: preserve content rewrite expression; YELLOW: preserve meaning rewrite + cushion; RED: delete, no inference), deduplication rules, connector freedom, 3 core principles (원문 범위, 관점 유지, 톤의 온도)
+2. **Template section block** — per-section guidance (label, instruction, length_hint, expression_pool)
+3. **RAG system block** (optional) — forbidden/expression_pool/cushion from RAG retrieval
 
 ### User Message Structure
 
 ```json
 {
   "meta": {
-    "receiver": "직장 상사",
-    "context": "요청, 사과",
-    "tone": "매우 공손",
+    "tone": "공손",
     "sender": "이름",
     "template": "T01_GENERAL",
     "sections": "S0,S1,S3,S5,S6,S8"
@@ -374,7 +367,7 @@ Optional prepended: Situation Analysis (facts + intent), summary from labeling
 | HALLUCINATED_FACT | WARNING | Numbers 3+ digits or Korean spelled-out numbers not in original (exceptions: 제3, 3호, 3층) |
 | ENDING_REPETITION | WARNING | 3+ consecutive identical Korean sentence endings |
 | LENGTH_OVEREXPANSION | WARNING | Output > 6000 chars or > original x 2.5 (for short originals) |
-| PERSPECTIVE_ERROR | WARNING | Wrong perspective phrases: "확인해 드리겠습니다", "접수되었습니다" (if recipient persona mismatch) |
+| PERSPECTIVE_ERROR | WARNING | Wrong perspective phrases: "확인해 드리겠습니다", "접수되었습니다" (always checked) |
 | LOCKED_SPAN_MISSING | ERROR | `{{TYPE_N}}` in raw LLM output but missing in final text after unmask |
 | REDACTED_REENTRY | ERROR | RED segment marker `[REDACTED:LABEL_N]` appears in final output |
 | REDACTION_TRACE | ERROR | Redaction trace patterns in output |
@@ -415,7 +408,7 @@ Optional prepended: Situation Analysis (facts + intent), summary from labeling
 | Call | Model | Temp | Max Tokens | Thinking | Always? | Purpose |
 |------|-------|------|------------|----------|---------|---------|
 | SituationAnalysis | gpt-4o-mini | 0.2 | 650 | — | Yes | Facts + intent + metadata validation |
-| StructureLabel | gemini-2.5-flash-lite | 0.2 | 800 | 128 | Yes | 14-label classification |
+| StructureLabel | gemini-2.5-flash-lite | 0.2 | 800 | 512 | Yes | 14-label classification |
 | CushionStrategy | gemini-2.5-flash-lite | 0.3 | 800 | 512 | YELLOW 있을 때 | Per-YELLOW 쿠션 전략 (병렬) |
 | Final Transform | gemini-2.5-flash | 0.85 | 4000 | dynamic (512/768/1024) | Yes | Template-guided rewriting |
 | IdentityBooster | gemini-2.5-flash-lite | 0.2 | 300 | — | Conditional | Semantic span extraction |

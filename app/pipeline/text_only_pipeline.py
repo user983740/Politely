@@ -1,7 +1,7 @@
 """Text-only pipeline orchestrator.
 
 Lightweight pipeline for keyboard/extension use. Input: original text only (+ optional sender).
-No metadata (persona/contexts/tone). SA intent guides the final transform.
+No metadata selection. SA intent guides the final transform.
 Template fixed to T01_GENERAL, tone fixed to POLITE.
 
 Flow:
@@ -25,7 +25,6 @@ from app.models.domain import (
 )
 from app.models.enums import (
     LockedSpanType,
-    Persona,
     SegmentLabelTier,
 )
 from app.pipeline import multi_model_prompt_builder as prompt_builder_final
@@ -156,11 +155,10 @@ async def execute(
     # Unmask
     unmask_result = locked_span_masker.unmask(final_result.content, spans)
 
-    # Validate (persona=OTHER since receiver is unknown)
     yellow_texts = [s.text for s in enforced if s.label.tier == SegmentLabelTier.YELLOW]
     validation = output_validator.validate_with_template(
         unmask_result.text, original_text, spans,
-        final_result.content, Persona.OTHER, redaction.redaction_map, yellow_texts,
+        final_result.content, redaction.redaction_map, yellow_texts,
         template, sections, enforced,
     )
 
@@ -212,7 +210,7 @@ async def execute(
         retry_unmask = locked_span_masker.unmask(retry_result.content, spans)
         validation = output_validator.validate_with_template(
             retry_unmask.text, original_text, spans,
-            retry_result.content, Persona.OTHER, redaction.redaction_map, yellow_texts,
+            retry_result.content, redaction.redaction_map, yellow_texts,
             template, sections, enforced,
         )
         unmask_result = retry_unmask

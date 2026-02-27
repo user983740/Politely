@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 
 from app.models.domain import LabeledSegment, Segment
-from app.models.enums import Persona, SegmentLabel, SegmentLabelTier
+from app.models.enums import SegmentLabel, SegmentLabelTier
 
 SCORE_THRESHOLD = 2
 MAX_UPGRADES = 2
@@ -124,7 +124,6 @@ def _score_category(text: str, cat_def: _CategoryDef) -> tuple[int, str]:
 def scan_yellow_triggers(
     segments: list[Segment],
     labeled_segments: list[LabeledSegment],
-    persona: Persona,
 ) -> list[YellowUpgrade]:
     """Scan GREEN segments for YELLOW-worthy patterns.
 

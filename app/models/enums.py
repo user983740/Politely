@@ -1,38 +1,6 @@
 from enum import Enum
 
 
-class Persona(str, Enum):
-    BOSS = "BOSS"
-    CLIENT = "CLIENT"
-    PARENT = "PARENT"
-    PROFESSOR = "PROFESSOR"
-    OFFICIAL = "OFFICIAL"
-    OTHER = "OTHER"
-
-
-class SituationContext(str, Enum):
-    REQUEST = "REQUEST"
-    SCHEDULE_DELAY = "SCHEDULE_DELAY"
-    URGING = "URGING"
-    REJECTION = "REJECTION"
-    APOLOGY = "APOLOGY"
-    COMPLAINT = "COMPLAINT"
-    ANNOUNCEMENT = "ANNOUNCEMENT"
-    FEEDBACK = "FEEDBACK"
-    BILLING = "BILLING"
-    SUPPORT = "SUPPORT"
-    CONTRACT = "CONTRACT"
-    RECRUITING = "RECRUITING"
-    CIVIL_COMPLAINT = "CIVIL_COMPLAINT"
-    GRATITUDE = "GRATITUDE"
-
-
-class ToneLevel(str, Enum):
-    NEUTRAL = "NEUTRAL"
-    POLITE = "POLITE"
-    VERY_POLITE = "VERY_POLITE"
-
-
 class Topic(str, Enum):
     REFUND_CANCEL = "REFUND_CANCEL"
     OUTAGE_ERROR = "OUTAGE_ERROR"

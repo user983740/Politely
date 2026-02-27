@@ -1,6 +1,6 @@
 """Structure template — section enum and template dataclass."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -109,20 +109,8 @@ _SECTION_META: dict[StructureSection, dict] = {
 
 
 @dataclass(frozen=True)
-class SectionSkipRule:
-    skip_sections: frozenset[StructureSection] = field(default_factory=frozenset)
-    shorten_sections: frozenset[StructureSection] = field(default_factory=frozenset)
-    expand_sections: frozenset[StructureSection] = field(default_factory=frozenset)
-
-    @staticmethod
-    def empty() -> "SectionSkipRule":
-        return SectionSkipRule()
-
-
-@dataclass(frozen=True)
 class StructureTemplate:
     id: str
     name: str
     section_order: list[StructureSection]
     constraints: str
-    persona_skip_rules: dict  # Persona -> SectionSkipRule (not typed to avoid circular import)

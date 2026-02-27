@@ -8,8 +8,6 @@ import re
 from dataclasses import dataclass, field
 
 from app.models.domain import LockedSpan
-from app.models.enums import Persona, SituationContext, ToneLevel
-from app.pipeline import prompt_builder
 from app.pipeline.gating.situation_analysis_service import SituationAnalysisResult
 from app.pipeline.template.structure_template import StructureSection, StructureTemplate
 
@@ -44,20 +42,19 @@ FINAL_CORE_SYSTEM_PROMPT = (
     "- `meta`: 수신자/상황/톤/발신자/template/sections\n"
     "- `segments`: 배열 (id, order, tier, label, text, dedupeKey)\n"
     "- `placeholders`: 고정 표현 매핑 ({{TYPE_N}} → 원본)\n\n"
+    "- `[요약]`: (선택) 라벨링 단계의 핵심 용건 요약. 전체 맥락 파악 참고용이며, 출력에 직접 복사하지 말 것\n\n"
     "order = 원문 위치 기반 정렬. 문맥 이해는 order 기준, 재구성은 섹션 템플릿 기준.\n"
     "dedupeKey가 동일한 세그먼트 = 중복.\n\n"
-    "## 플레이스홀더 규칙 (위반 시 검증 ERROR → 자동 재시도)\n"
-    "- `{{TYPE_N}}` 형식(예: {{DATE_1}}, {{PHONE_1}}, {{EMAIL_1}}, "
-    "{{ISSUE_TICKET_1}})을 출력에 **반드시 그대로 포함**\n"
-    "- 서버가 후처리로 실제 값으로 복원하므로, 값으로 풀어 쓰거나 새로 만들거나 삭제하면 안 됨\n"
-    "- segments 배열의 text에 포함된 {{TYPE_N}}은 해당 세그먼트를 재작성할 때 반드시 출력 문장에 포함해야 함\n"
-    "- ⚠️ **YELLOW 세그먼트 주의**: 재작성 시 문장 구조를 바꾸더라도 "
-    "원문 text 안의 플레이스홀더를 빠뜨리지 말 것. "
-    "쿠션/방향 문장을 추가하더라도 플레이스홀더가 포함된 사실 부분은 반드시 유지\n"
-    "- ⚠️ `mustInclude` 배열이 있는 세그먼트: 해당 플레이스홀더를 출력에 반드시 포함해야 함. "
-    "YELLOW 재작성으로 문장을 바꾸더라도 mustInclude 항목은 절대 생략 금지\n"
-    "- ⚠️ GREEN 세그먼트 재구성 시에도 플레이스홀더 누락 금지\n"
-    "- **최종 검증**: placeholders 객체의 모든 키가 출력에 정확히 1회 이상 존재해야 함. 하나라도 누락되면 검증 실패\n\n"
+    "## 플레이스홀더 보존 원칙 (위반 시 검증 ERROR → 자동 재시도)\n"
+    "- `{{TYPE_N}}` 형식(예: {{DATE_1}}, {{PHONE_1}})을 출력에 **반드시 그대로 포함**. "
+    "서버가 후처리로 실제 값으로 복원하므로, 값으로 풀어 쓰거나 새로 만들거나 삭제하면 안 됨\n"
+    "- GREEN/YELLOW 모든 세그먼트의 text에 포함된 플레이스홀더와 mustInclude 배열 항목은 "
+    "재작성 시 반드시 출력에 포함. 문장 구조 변경·쿠션 삽입과 무관하게 절대 생략 금지\n"
+    "- **최종 검증**: placeholders 객체의 모든 키가 출력에 정확히 1회 이상 존재해야 함\n\n"
+    "## RED 추론/재생성 절대 금지 (위반 시 검증 ERROR)\n"
+    "인접 YELLOW/GREEN 세그먼트의 맥락에서 RED 내용을 추론하여 새로 생성하지 말 것.\n"
+    'RED의 text는 null이므로 그 주제/내용을 암시하는 어떤 표현도 출력 금지.\n'
+    '예: RED가 "개인 사정" 관련이었더라도 출력에 "개인적인 사정도 있었지만" 같은 문구 생성 금지.\n\n'
     "## 출력 규칙 (절대 준수)\n"
     "- 변환된 메시지 텍스트만 출력. 분석/설명/이모지/메타 발언 절대 금지.\n"
     "- 첫 글자부터 바로 변환된 메시지. 앞뒤 부연 금지.\n"
@@ -75,11 +72,12 @@ FINAL_CORE_SYSTEM_PROMPT = (
     '- "다시 한번 사과의 말씀을 드립니다"\n'
     '- "불편을 끼쳐 드려 대단히 죄송합니다" (대단히+죄송 과잉)\n'
     '- "원활한 소통을 위해"\n'
-    '- "내부 확인 결과" / "내부적으로 확인한 결과" / "내부 검토 결과"\n\n'
+    '- "내부 확인 결과" / "내부적으로 확인한 결과" / "내부 검토 결과" '
+    '(※ "내부" 없이 "확인한 결과", "점검해 본 결과", "살펴본 결과"는 S2 섹션에서 사용 가능)\n\n'
     "## 자연스러움 규칙 (필수)\n"
     "- 문장 길이를 일정하게 맞추지 말 것 — 짧은 문장과 긴 문장이 섞여야 자연스러움\n"
     "- 불필요한 격식 문구(~에 대하여, ~을 통하여) 최소화 — 구어에 가까운 비즈니스체 지향\n"
-    '- 같은 종결어미 반복 금지 — "~드리겠습니다" 연속 2회 금지, "~습니다" 연속 3회 금지. '
+    '- 같은 종결어미 반복 금지 — 동일 종결어미 연속 3회 금지, "~드리겠습니다" 전체 3회 이상 금지. '
     '쿠션 삽입으로 문장이 늘면 중간을 명사형 종결 또는 연결형("~하며", "~하여")으로 전환\n'
     "- 한 문단이 다른 문단보다 현저히 짧아도 괜찮음 — 균등 분배 강제 금지\n"
     '- 접속사 남용 금지 — "또한", "아울러", "더불어" 같은 나열 접속사 연속 사용 금지\n'
@@ -99,6 +97,7 @@ FINAL_CORE_SYSTEM_PROMPT = (
     "- APOLOGY → 사과 대상·이유 보존 + 진정성 있는 정중한 사과\n"
     "- COURTESY → 관계에 맞는 자연스러운 인사 (맨앞/끝 1줄 허용)\n\n"
     "⚠️ GREEN 의미 불변 제약 (위반 시 할루시네이션):\n"
+    "- GREEN 핵심 사실/의도/수치는 절대 누락 금지\n"
     "- 요청의 대상/행동/기한/조건, 사실(수치/날짜/원인/결과) 변경·추가·삭제 금지\n"
     '- **원문의 의미를 다른 의미로 바꾸지 말 것** (예: "성적이 나쁘다"를 "시험을 보지 않았다"로 바꾸면 안 됨)\n'
     "- 원문에 없는 행동 약속(후속 조치/재발 방지/내부 확인 등) 추가 금지\n"
@@ -116,18 +115,23 @@ FINAL_CORE_SYSTEM_PROMPT = (
     '✗ 직접 귀책: "귀사 문제로", "~측 실수로" → ✓ 주어를 상황/시스템으로: "확인 결과 ~부분에서 차이가 발생하여"\n'
     '✗ 직접 거부: "그건 어렵습니다", "과한 것 같고" → ✓ 대안 방향: "~방향으로 검토해 보면 어떨까 합니다"\n'
     '✗ 직접 감정: "힘듭니다", "답답합니다" → ✓ 간접 표현: "부담이 되는 부분이 있어", "우려가 됩니다"\n'
-    '✗ 직접 지적: "~하지 마세요", "또 ~하셨는데" → ✓ 요청 전환: "~해 주시면 감사하겠습니다"\n\n'
+    '✗ 직접 지적: "~하지 마세요", "또 ~하셨는데" → ✓ 요청 전환: "~해 주시면 감사하겠습니다"\n'
+    '✗ 비교/대조 구문: "~라기보단", "~라기보다는", "~가 아니라", "~이 아닌", "~때문이 아니라" '
+    '→ ✓ 비교 대상 제거, 원인만 직접 서술. '
+    '예: "코드가 엉망이라기보단 서버 스펙이 낮아서" → "서버 사양이 성능에 영향을 미치고 있습니다"\n\n'
     "**라벨별 재작성 전략**:\n"
     "- ACCOUNTABILITY:\n"
-    '  ① 쿠션: persona에 맞는 자연스러운 도입 표현 사용 (아래 persona 블록 참조). "내부 확인 결과" 금지\n'
-    "  ② 사실: 주어를 상대방→상황/시스템/프로세스로 전환. 인과관계(A→B→결과) 보존하되 비난 제거\n"
+    '  ① 쿠션: 수신자에게 자연스러운 도입 표현 사용. "내부 확인 결과" 금지\n'
+    "  ② 사실: 주어를 상대방→상황/시스템/프로세스로 전환. 인과관계(A→B→결과) 보존하되 비난 제거. "
+    "⚠️ '~라기보단/~가 아니라' 비교 구문 → 비교 대상 삭제, 원인만 서술\n"
     "  ③ 방향: 원인 공유 목적임을 명시\n"
     "  ✗ 개인명 비난 금지: 특정 인물/부서를 지목하여 비난하는 표현 그대로 유지 금지. "
     "주어를 시스템/프로세스/상황으로 전환\n"
     "  ✗ 귀책 직접 지목 금지: \"~측 문제\", \"~측 실수\" 등 직접 귀책 표현 금지\n"
     "- SELF_JUSTIFICATION:\n"
     '  ① 쿠션: "말씀 주신 부분 관련하여" / "해당 건 배경을 말씀드리면"\n'
-    '  ② 사실: 업무 맥락(일정/원인/의존성) 보존. 방어 구조("어쩔 수 없었다"/"사실 ~했다" 류) 제거\n'
+    '  ② 사실: 업무 맥락(일정/원인/의존성) 보존. 방어 구조("어쩔 수 없었다"/"사실 ~했다" 류) 제거. '
+    "⚠️ '~라기보단/~가 아니라' 비교 구문 → 비교 대상 삭제, 원인만 서술\n"
     '  ③ 방향: 해결 의지 마무리 ("향후 ~하도록 하겠습니다")\n'
     '  ✗ 직접 감정어 금지: "억울하다", "서운하다", "답답하다" 등 감정 직접 표현 금지. '
     '간접 표현으로 전환 ("부담이 되는 부분이 있어")\n'
@@ -138,12 +142,11 @@ FINAL_CORE_SYSTEM_PROMPT = (
     '  ③ 방향: 기대 효과 제시. 심각도·긴급도 유지\n'
     "  ✗ 원문 톤 잔존 금지: 원문의 부정적 톤/비난 어투를 그대로 유지하지 말 것. "
     "반드시 요청/개선 프레임으로 전환\n"
-    '  ✗ 직접 거부 금지: "그건 어렵습니다", "과한 것 같고" 등 직접 거부/판단 표현 금지\n'
-    '  ※ CLIENT/OFFICIAL: 직접 거부/판단 표현 금지. 원인 파악→조치 안내 순서로 전환\n'
+    '  ✗ 직접 거부/판단 표현 금지 ("그건 어렵습니다", "과한 것 같고" 등) → 원인 파악 후 조치 안내 순서로 전환\n'
     "- EMOTIONAL:\n"
     "  ① 쿠션 → ② 감정을 삭제하지 말고 **간접 표현으로 전환** → ③ 협조 의지 마무리\n"
     "- EXCESS_DETAIL:\n"
-    '  ① 중복 제거 + 추측→가능성 전환 ("~일 가능성이 있어 보입니다") + persona별 확인 표현 추가\n'
+    '  ① 중복 제거 + 추측→가능성 전환 ("~일 가능성이 있어 보입니다") + 상황에 맞는 확인 표현 추가\n'
     "  ② 논리 체인(A→B→C) 압축 보존 — 핵심 인과만 남기고 반복/부연 제거\n"
     '  ③ **구어체→비즈니스체 전환 필수**: "꼬여서"→"이슈가 발생하여", "난리"→"문제가 발생"\n\n'
     "**YELLOW 과확장 방지**: YELLOW 재작성 + 쿠션 결과가 원문 YELLOW 세그먼트의 2배를 넘으면 안 됨. "
@@ -151,10 +154,7 @@ FINAL_CORE_SYSTEM_PROMPT = (
     "### RED (완전 삭제 — 흔적 없음)\n"
     "text가 null → 내용을 알 수 없음.\n"
     '최종 출력에서 RED의 존재 자체를 언급/암시 금지 ("일부 내용을 삭제했습니다", "[삭제됨]" 등 표현 금지).\n'
-    "RED 자리에 새 문장 만들지 않고, 인접 블록을 자연스럽게 연결.\n"
-    "⚠️ **RED 추론/재생성 절대 금지**: 인접 YELLOW/GREEN 세그먼트의 맥락에서 RED 내용을 추론하여 새로 생성하지 말 것.\n"
-    '예: RED가 "개인 사정" 관련이었더라도 출력에 "개인적인 사정도 있었지만" 같은 문구 생성 금지.\n'
-    "RED의 text는 null이므로 그 주제/내용을 암시하는 어떤 표현도 출력하면 안 됨.\n\n"
+    "RED 자리에 새 문장 만들지 않고, 인접 블록을 자연스럽게 연결.\n\n"
     "## 중복 제거 규칙 (dedupeKey + order 기준)\n"
     "- dedupeKey 동일 → 가장 구체적인 것 하나만 사용. 구체성 동등하면 order 큰 것(원문상 뒤) 채택\n"
     "- 동일 REQUEST 반복 → 가장 명확한 것 하나만. 기한/조건이 다르면(dedupeKey 다름) 각각 보존\n"
@@ -167,19 +167,14 @@ FINAL_CORE_SYSTEM_PROMPT = (
     "- 블록 전환 시 자연스러운 연결\n"
     "- 단, 새로운 사실/약속 추가 금지\n\n"
     "## 핵심 원칙\n"
-    "1. **해체 → 재구성**: GREEN을 뼈대로, 새 문장으로 섹션 템플릿에 배치. "
-    "YELLOW는 라벨별 전략으로 재작성. RED는 무시.\n"
-    "2. **원문 범위 + 쿠션 표현**: 원문에 없는 구체적 사실/약속/수치 추가 금지. "
+    "1. **원문 범위 + 쿠션 표현**: 원문에 없는 구체적 사실/약속/수치 추가 금지. "
     "원문에 없는 소속/학과/부서명/직책/직급 추가 금지. "
     "[이름], [소속], [학과] 등 빈칸형 플레이스홀더도 원문에 없으면 사용 금지. "
     "인사/공감/해결 의지 등 비즈니스 예의 표현은 적극 활용.\n"
-    "3. **중복 통합 & 간결화**: dedupeKey 기반 중복 제거. "
-    "RED 제거 자리는 자연스럽게 연결. 접속사/수식어 최소화. "
-    "GREEN 핵심 사실/의도/수치는 절대 누락 금지.\n"
-    "4. **관점 유지**: 화자/청자 정확히 구분. 화자 관점 벗어나지 말 것.\n"
-    "5. **고정 표현 절대 보존**: {{TYPE_N}} 플레이스홀더 수정/삭제/추가 금지.\n"
-    '6. **자연스러움**: "드리겠습니다" 연속 2회 이상 금지. 어미 다양하게. 기계적 패턴 금지.\n'
-    "7. **톤의 온도**: persona와 toneLevel이 결정. POLITE라도 자연스러운 공손함이지, 격식 문서체 아님."
+    "2. **관점 유지**: 화자/청자 정확히 구분. 화자 관점 벗어나지 말 것. "
+    "원문이 1인칭(나/내가/제가)이면 반드시 1인칭 유지. "
+    "3인칭(\"담당자가\", \"해당 인원이\") 전환 금지.\n"
+    "3. **톤의 온도**: toneLevel이 결정. POLITE라도 자연스러운 공손함이지, 격식 문서체 아님."
 )
 
 
@@ -207,7 +202,8 @@ def _build_template_section_block(
                 "\n- ⚠️ **필수**: 이 섹션은 반드시 출력에 포함해야 합니다. "
                 "다음 패턴 중 하나 이상을 사용하세요: "
                 '"확인한 결과", "점검해 본 결과", "검토한 바", "살펴본 결과", '
-                '"파악한 바로는", "로그 기준으로 보면"'
+                '"파악한 바로는", "로그 기준으로 보면" '
+                '(이 표현들은 금지 표현이 아닙니다. S2에서 반드시 사용하세요)'
             )
         parts.append("\n")
 
@@ -288,22 +284,16 @@ def _build_rag_user_block(rag_results) -> str:
 
 
 def build_final_system_prompt(
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
     template: StructureTemplate,
     effective_sections: list[StructureSection],
     rag_results=None,
 ) -> str:
     base = FINAL_CORE_SYSTEM_PROMPT + _build_template_section_block(template, effective_sections)
     base += _build_rag_system_block(rag_results)
-    return prompt_builder.build_dynamic_blocks(base, persona, contexts, tone_level)
+    return base
 
 
 def build_final_user_message(
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
     sender_info: str | None,
     ordered_segments: list[OrderedSegment],
     all_locked_spans: list[LockedSpan] | None,
@@ -344,13 +334,10 @@ def build_final_user_message(
     parts.append("{\n")
 
     # meta
-    context_str = ", ".join(prompt_builder.get_context_label(ctx) for ctx in contexts)
     sections_str = ",".join(s.name for s in effective_sections)
 
     parts.append("  \"meta\": {\n")
-    parts.append(f'    "receiver": "{_escape_json(prompt_builder.get_persona_label(persona))}",\n')
-    parts.append(f'    "context": "{_escape_json(context_str)}",\n')
-    parts.append(f'    "tone": "{_escape_json(prompt_builder.get_tone_label(tone_level))}"')
+    parts.append('    "tone": "공손"')
     if sender_info and sender_info.strip():
         parts.append(f',\n    "sender": "{_escape_json(sender_info)}"')
     parts.append(f',\n    "template": "{_escape_json(template.id)}"')

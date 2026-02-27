@@ -59,6 +59,19 @@ _PER_SEGMENT_SYSTEM_PROMPT = """\
 - EMOTIONAL: 감정 삭제 금지, 간접 전환만. 과잉 공감 금지.
 - EXCESS_DETAIL: 압축 중심. 쿠션은 최소화.
 
+## 예시
+
+입력: T2 | ACCOUNTABILITY | "귀사 서버 설정이 이상해서 생긴거고"
+
+출력:
+{
+  "segment_id": "T2",
+  "label": "ACCOUNTABILITY",
+  "approach": "상황/시스템 주어로 전환, 비난 제거",
+  "cushion_phrase": "확인해 본 결과",
+  "avoid": "직접 귀책 지목, 비난 어조"
+}
+
 ## 주의사항
 - 화자 의도(SA intent)를 훼손하지 않는 범위에서 쿠션 적용
 - 쿠션이 본문보다 길어지면 안 됨 — 쿠션은 보조, 본문 사실이 주연

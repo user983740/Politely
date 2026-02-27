@@ -18,7 +18,7 @@ from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.models.domain import LabeledSegment, LockedSpan, Segment
-from app.models.enums import Persona, Purpose, SegmentLabelTier, SituationContext, ToneLevel, Topic
+from app.models.enums import Purpose, SegmentLabelTier, Topic
 from app.pipeline import cache_metrics_tracker
 from app.pipeline.ai_call_router import call_llm
 from app.pipeline.ai_transform_service import AiTransformError
@@ -54,9 +54,6 @@ def _get_gemini_client() -> genai.Client:
 
 
 async def stream_transform(
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
     original_text: str,
     user_prompt: str | None,
     sender_info: str | None,
@@ -135,7 +132,7 @@ async def stream_transform(
 
             # 1. Run analysis phase with progress callbacks
             analysis = await execute_analysis(
-                persona, contexts, tone_level, original_text,
+                original_text,
                 user_prompt, sender_info, identity_booster_toggle,
                 topic, purpose,
                 ai_call_fn=call_llm,
@@ -150,7 +147,7 @@ async def stream_transform(
 
                     await push_event("phase", "rag_retrieving")
                     rag_results = await _retrieve_rag(
-                        original_text, analysis, persona, contexts, tone_level,
+                        original_text, analysis,
                     )
                     if rag_results and not rag_results.is_empty():
                         await push_event("ragResults", {
@@ -168,7 +165,7 @@ async def stream_transform(
                     logger.warning("[Streaming] RAG retrieval failed, continuing without", exc_info=True)
 
             # 2. Build final prompt
-            prompt = build_final_prompt(analysis, persona, contexts, tone_level, sender_info, rag_results=rag_results)
+            prompt = build_final_prompt(analysis, sender_info, rag_results=rag_results)
 
             # 3. Stream final model
             await push_event("phase", "generating")
@@ -196,7 +193,7 @@ async def stream_transform(
 
             validation = output_validator.validate_with_template(
                 final_stream_result["unmasked_text"], original_text, prompt.locked_spans,
-                final_stream_result["raw_content"], persona, prompt.redaction_map, yellow_texts,
+                final_stream_result["raw_content"], prompt.redaction_map, yellow_texts,
                 analysis.chosen_template, analysis.effective_sections, analysis.labeled_segments,
             )
 
@@ -231,7 +228,7 @@ async def stream_transform(
 
                 validation = output_validator.validate_with_template(
                     active_result["unmasked_text"], original_text, prompt.locked_spans,
-                    active_result["raw_content"], persona, prompt.redaction_map, yellow_texts,
+                    active_result["raw_content"], prompt.redaction_map, yellow_texts,
                     analysis.chosen_template, analysis.effective_sections, analysis.labeled_segments,
                 )
 
@@ -505,7 +502,7 @@ async def stream_text_only(
 
             validation = output_validator.validate_with_template(
                 final_stream_result["unmasked_text"], original_text, spans,
-                final_stream_result["raw_content"], Persona.OTHER, redaction.redaction_map, yellow_texts,
+                final_stream_result["raw_content"], redaction.redaction_map, yellow_texts,
                 template, sections, enforced,
             )
 
@@ -546,7 +543,7 @@ async def stream_text_only(
 
                 validation = output_validator.validate_with_template(
                     active_result["unmasked_text"], original_text, spans,
-                    active_result["raw_content"], Persona.OTHER, redaction.redaction_map, yellow_texts,
+                    active_result["raw_content"], redaction.redaction_map, yellow_texts,
                     template, sections, enforced,
                 )
 
@@ -804,7 +801,7 @@ async def stream_text_only_ab(
             # Validate A
             validation_a = output_validator.validate_with_template(
                 result_a["unmasked_text"], original_text, spans,
-                result_a["raw_content"], Persona.OTHER, redaction.redaction_map, yellow_texts,
+                result_a["raw_content"], redaction.redaction_map, yellow_texts,
                 template, sections, enforced,
             )
 
@@ -851,7 +848,7 @@ async def stream_text_only_ab(
             # Validate B
             validation_b = output_validator.validate_with_template(
                 result_b["unmasked_text"], original_text, spans,
-                result_b["raw_content"], Persona.OTHER, redaction.redaction_map, yellow_texts,
+                result_b["raw_content"], redaction.redaction_map, yellow_texts,
                 template, sections, enforced,
             )
 

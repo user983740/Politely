@@ -30,10 +30,6 @@
 ### 1-1. Enum 타입 (`app/models/enums.py`)
 
 ```python
-# 사용자 입력 enum
-class Persona(str, Enum):       # BOSS, CLIENT, PARENT, PROFESSOR, OFFICIAL, OTHER
-class SituationContext(str, Enum):  # REQUEST, SCHEDULE_DELAY, URGING, REJECTION, APOLOGY, COMPLAINT, ANNOUNCEMENT, FEEDBACK, BILLING, SUPPORT, CONTRACT, RECRUITING, CIVIL_COMPLAINT, GRATITUDE
-class ToneLevel(str, Enum):     # NEUTRAL, POLITE, VERY_POLITE
 class Topic(str, Enum):         # REFUND_CANCEL, OUTAGE_ERROR, ... (11종)
 class Purpose(str, Enum):       # INFO_DELIVERY, DATA_REQUEST, ... (11종)
 
@@ -164,7 +160,7 @@ class AnalysisPhaseResult:
     metadata_overridden: bool
     chosen_template_id: str
     chosen_template: StructureTemplate
-    effective_sections: list[StructureSection]   # 페르소나 규칙 적용 후 실제 섹션
+    effective_sections: list[StructureSection]   # S2 강제 등 규칙 적용 후 실제 섹션
     green_count: int
     yellow_count: int
     red_count: int
@@ -173,7 +169,7 @@ class AnalysisPhaseResult:
 
 @dataclass(frozen=True)
 class FinalPromptPair:
-    system_prompt: str                  # 시스템 프롬프트 (core + template + persona + context + tone)
+    system_prompt: str                  # 시스템 프롬프트 (core + template sections)
     user_message: str                   # 유저 메시지 (SA + JSON {meta, segments, placeholders})
     locked_spans: list[LockedSpan]      # 언마스킹에 필요한 스팬
     redaction_map: dict[str, str]       # "[REDACTED:LABEL_N]" → 원본 텍스트
@@ -191,32 +187,26 @@ class PipelineResult:
 
 **파일:** `app/api/v1/transform.py`
 
-### `transform(request: TransformRequest) -> TransformResponse`
+### `transform(request: TransformTextOnlyRequest) -> TransformResponse`
 
 일반 (비스트리밍) 변환 엔드포인트.
 
-- **입력:** `TransformRequest` (Pydantic 모델)
+- **입력:** `TransformTextOnlyRequest` (Pydantic 모델)
   ```
-  persona: Persona
-  contexts: list[SituationContext]     # min_length=1
-  tone_level: ToneLevel
   original_text: str                   # 1~2000자
   user_prompt: str | None              # max 500자
   sender_info: str | None              # max 100자
-  identity_booster_toggle: bool | None
-  topic: Topic | None
-  purpose: Purpose | None
   ```
-- **처리:** `transform_app_service.transform()` 호출
-- **출력:** `TransformResponse(transformed_text: str, analysis_context: str | None)`
+- **처리:** `text_only_pipeline.execute()` 호출
+- **출력:** `TransformResponse(transformed_text: str)`
 
-### `stream_transform(request: TransformRequest) -> EventSourceResponse`
+### `stream_transform(request: TransformTextOnlyRequest) -> EventSourceResponse`
 
 SSE 스트리밍 변환 엔드포인트.
 
-- **입력:** 동일한 `TransformRequest`
-- **처리:** 입력 검증 후 `ai_streaming_service.stream_transform()`을 직접 호출
-- **출력:** SSE 이벤트 스트림 (15종 이벤트)
+- **입력:** 동일한 `TransformTextOnlyRequest`
+- **처리:** 입력 검증 후 `ai_streaming_service.stream_text_only()`을 직접 호출
+- **출력:** SSE 이벤트 스트림 (17종 이벤트)
 
 ---
 
@@ -224,13 +214,10 @@ SSE 스트리밍 변환 엔드포인트.
 
 **파일:** `app/services/transform_app_service.py`
 
-### `transform(persona, contexts, tone_level, original_text, user_prompt, sender_info) -> TransformResult`
+### `transform(original_text, user_prompt, sender_info) -> TransformResult`
 
 ```
 입력:
-  persona: Persona
-  contexts: list[SituationContext]
-  tone_level: ToneLevel
   original_text: str
   user_prompt: str | None
   sender_info: str | None
@@ -244,20 +231,17 @@ SSE 스트리밍 변환 엔드포인트.
 반환: TransformResult(transformed_text=result.transformed_text)
 ```
 
-### `_retrieve_rag(original_text, analysis, persona, contexts, tone_level) -> RagResults | None`
+### `_retrieve_rag(original_text, analysis) -> RagResults | None`
 
 ```
 입력:
   original_text: str
   analysis: AnalysisPhaseResult
-  persona: Persona
-  contexts: list[SituationContext]
-  tone_level: ToneLevel
 
 처리:
   1. RAG_ENABLED=false면 None 반환
   2. rag_index.size == 0이면 None 반환
-  3. 통합 query 구성: original_text + SA.intent + persona + contexts
+  3. 통합 query 구성: original_text + SA.intent
   4. embed_text(query) → 1536-dim vector (OpenAI 1회 호출)
   5. rag_index.search() → RagResults (6 카테고리, 메타데이터 필터 + cosine + MMR)
   6. 실패 시 try/except → None (파이프라인 중단 금지)
@@ -285,9 +269,6 @@ SSE 스트리밍 변환 엔드포인트.
 
 ```
 입력:
-  persona: Persona
-  contexts: list[SituationContext]
-  tone_level: ToneLevel
   original_text: str
   user_prompt: str | None
   sender_info: str | None
@@ -323,16 +304,14 @@ SSE 스트리밍 변환 엔드포인트.
 입력:
   final_model_name: str                — "gemini-2.5-flash"
   analysis: AnalysisPhaseResult        — execute_analysis의 결과
-  persona: Persona
-  contexts: list[SituationContext]
-  tone_level: ToneLevel
   original_text: str
   sender_info: str | None
   max_tokens: int                      — 4000
   ai_call_fn = None
+  rag_results = None
 
 처리 순서:
-  1. build_final_prompt(analysis, persona, contexts, tone_level, sender_info, rag_results) → prompt
+  1. build_final_prompt(analysis, sender_info, rag_results) → prompt
   2. compute_thinking_budget(segments, labeled_segments, len(original_text)) → thinking_budget
   3. ai_call_fn(final_model_name, prompt.system_prompt, prompt.user_message, -1, max_tokens, None, thinking_budget=thinking_budget)
      → final_result: LlmCallResult
@@ -348,10 +327,10 @@ SSE 스트리밍 변환 엔드포인트.
 반환: PipelineResult(transformed_text, validation_issues, stats)
 ```
 
-### `build_final_prompt(analysis, persona, contexts, tone_level, sender_info, rag_results=None) -> FinalPromptPair`
+### `build_final_prompt(analysis, sender_info, rag_results=None) -> FinalPromptPair`
 
 ```
-입력: AnalysisPhaseResult + 메타데이터 + RagResults (optional)
+입력: AnalysisPhaseResult + sender_info + RagResults (optional)
 
 처리:
   1. labeled_segments를 start 위치 기준 정렬
@@ -360,7 +339,7 @@ SSE 스트리밍 변환 엔드포인트.
      - booster 스팬이 세그먼트 범위 안에 있으면 텍스트에 플레이스홀더 적용
      - YELLOW면 mustInclude = 텍스트 내 {{TYPE_N}} 플레이스홀더 목록
      - OrderedSegment(id, order, tier, label, text, dedupe_key, must_include) 생성
-  3. build_final_system_prompt(..., rag_results) → 시스템 프롬프트 + RAG 시스템 블록
+  3. build_final_system_prompt(template, effective_sections, rag_results) → 시스템 프롬프트 + RAG 시스템 블록
      - forbidden → "⛔ 금지 표현" (강제 규칙)
      - expression_pool → "참고 표현"
      - cushion → "YELLOW 쿠션 참고"
@@ -496,54 +475,46 @@ class PipelineProgressCallback:
 
 ### 6-1. GatingConditionEvaluator (`app/pipeline/gating/gating_condition_evaluator.py`)
 
-#### `should_fire_situation_analysis(persona: Persona, text: str) -> bool`
+#### `should_fire_situation_analysis(text: str) -> bool`
 
 ```
 항상 True 반환.
 ```
 
-#### `should_fire_identity_booster(frontend_toggle, persona, locked_spans, text_length) -> bool`
+#### `should_fire_identity_booster(frontend_toggle, locked_spans, text_length) -> bool`
 
 ```
 입력:
   frontend_toggle: bool
-  persona: Persona
   locked_spans: list[LockedSpan]
   text_length: int
   min_text_length: int = 80
   max_locked_spans: int = 1
 
-반환 True 조건 (OR):
-  1. frontend_toggle == True
-  2. persona ∈ {BOSS, CLIENT, OFFICIAL} AND len(locked_spans) ≤ 1 AND text_length ≥ 80
+반환 True 조건:
+  frontend_toggle == True
 ```
 
 ### 6-2. SituationAnalysisService (`app/pipeline/gating/situation_analysis_service.py`)
 
 **LLM 호출 — gpt-4o-mini, temp=0.2, max_tokens=650**
 
-#### `analyze(persona, contexts, tone_level, masked_text, user_prompt, sender_info, ai_call_fn, topic?, purpose?) -> SituationAnalysisResult`
+#### `analyze_text_only(masked_text, sender_info, ai_call_fn, user_prompt?) -> SituationAnalysisResult`
 
 ```
 입력:
-  persona: Persona
-  contexts: list[SituationContext]
-  tone_level: ToneLevel
   masked_text: str                    # 마스킹된 텍스트
-  user_prompt: str | None
   sender_info: str | None
   ai_call_fn                          # LLM 호출 함수
-  topic: Topic | None
-  purpose: Purpose | None
+  user_prompt: str | None = None
 
 처리:
   1. 유저 메시지 조립:
-     "받는 사람: {persona_label}\n상황: {context_labels}\n말투 강도: {tone_label}\n..."
-     + 원문
-  2. ai_call_fn(MODEL="gpt-4o-mini", SYSTEM_PROMPT, user_message, 0.2, 650, None) → LlmCallResult
-  3. _parse_result(result) → JSON 파싱
+     sender_info (있으면) + user_prompt (있으면) + 원문
+  2. ai_call_fn(MODEL="gpt-4o-mini", SYSTEM_PROMPT_TEXT_ONLY, user_message, 0.2, 650, None) → LlmCallResult
+  3. _parse_result_text_only(result) → facts + intent only (metadata_check 없음)
 
-반환: SituationAnalysisResult
+반환: SituationAnalysisResult (facts, intent, prompt_tokens, completion_tokens)
   실패 시: SituationAnalysisResult(facts=[], intent="", prompt_tokens=0, completion_tokens=0)
 
 내부 타입:
@@ -556,7 +527,7 @@ class PipelineProgressCallback:
     confidence: float                   # 확신도 (0.0~1.0)
     inferred_topic: Topic | None        # 추론된 주제
     inferred_purpose: Purpose | None    # 추론된 목적
-    inferred_primary_context: SituationContext | None  # 추론된 주 상황
+    inferred_primary_context: str | None  # 추론된 주 상황
     # meets_threshold() -> bool         should_override AND confidence >= 0.72
 
   @dataclass(frozen=True) SituationAnalysisResult:
@@ -588,18 +559,17 @@ class PipelineProgressCallback:
 
 **LLM 호출 — gemini-2.5-flash-lite, temp=0.2, max_tokens=300, thinking 없음**
 
-#### `boost(persona, normalized_text, current_spans, masked_text, ai_call_fn) -> BoosterResult`
+#### `boost(normalized_text, current_spans, masked_text, ai_call_fn) -> BoosterResult`
 
 ```
 입력:
-  persona: Persona
   normalized_text: str          # 정규화된 원본 텍스트 (마스킹 전)
   current_spans: list[LockedSpan]  # 기존 regex 스팬
   masked_text: str              # 마스킹된 텍스트
   ai_call_fn                    # LLM 호출 함수
 
 처리:
-  1. 유저 메시지: "받는 사람: {persona_label}\n\n원문:\n{masked_text}"
+  1. 유저 메시지: "원문:\n{masked_text}"
   2. ai_call_fn(MODEL, SYSTEM_PROMPT, user_message, 0.2, 300, None, thinking_budget=None)
   3. _parse_semantic_spans(normalized_text, current_spans, result.content) → new_spans
 
@@ -690,6 +660,8 @@ class PipelineProgressCallback:
 
 프롬프트 규칙 6: 연결어미(~라기보단, ~보단, ~해서, ~이라서, ~하게, ~인데, ~거든, ~니까)로
   끝나는 불완전 조각 분리 금지. 뒤 절과 함께 하나의 단위로 유지.
+예시 1: 완결된 문장 경계에서 분절 (확인했습니다 ||| 관련 자료는~)
+예시 2: 연결어미(~지만)로 끝나는 조각이 생기므로 분절하지 않음 (원문 유지)
 
 반환: RefineResult(segments, prompt_tokens, completion_tokens)
   실패 시: 원본 segments 그대로 반환
@@ -709,15 +681,10 @@ class PipelineProgressCallback:
 
 **LLM 호출 — gemini-2.5-flash-lite, temp=0.2, max_tokens=800, thinking=512**
 
-#### `label(persona, contexts, tone_level, user_prompt, sender_info, segments, masked_text, ai_call_fn) -> StructureLabelResult`
+#### `label_text_only(segments, masked_text, ai_call_fn) -> StructureLabelResult`
 
 ```
 입력:
-  persona: Persona
-  contexts: list[SituationContext]
-  tone_level: ToneLevel
-  user_prompt: str | None
-  sender_info: str | None
   segments: list[Segment]
   masked_text: str
   ai_call_fn
@@ -757,13 +724,12 @@ class PipelineProgressCallback:
 
 **서버사이드 정규식, LLM 없음**
 
-#### `scan_yellow_triggers(segments, labeled_segments, persona) -> list[YellowUpgrade]`
+#### `scan_yellow_triggers(segments, labeled_segments) -> list[YellowUpgrade]`
 
 ```
 입력:
   segments: list[Segment]
   labeled_segments: list[LabeledSegment]
-  persona: Persona
 
 처리:
   GREEN 세그먼트 각각에 대해 4가지 카테고리 점수 계산:
@@ -841,7 +807,6 @@ class StructureTemplate:
     name: str                           # "일반 전달"
     section_order: list[StructureSection]  # [S0, S1, S3, S5, S6, S8]
     constraints: str                    # 템플릿 설명/제약
-    persona_skip_rules: dict            # {Persona: SectionSkipRule}
 ```
 
 ### 9-2. TemplateRegistry (`app/pipeline/template/template_registry.py`)
@@ -869,13 +834,11 @@ T12_WARNING_PREVENTION 경고/재발 방지  [S0,S1,S3,S5,S6,S8]
 
 ### 9-3. TemplateSelector (`app/pipeline/template/template_selector.py`)
 
-#### `select_template(registry, persona, contexts, topic, purpose, label_stats, masked_text) -> TemplateSelectionResult`
+#### `select_template(registry, topic, purpose, label_stats, masked_text) -> TemplateSelectionResult`
 
 ```
 입력:
   registry: TemplateRegistry
-  persona: Persona
-  contexts: list[SituationContext]
   topic: Topic | None
   purpose: Purpose | None
   label_stats: LabelStats
@@ -883,12 +846,10 @@ T12_WARNING_PREVENTION 경고/재발 방지  [S0,S1,S3,S5,S6,S8]
 
 처리 (우선순위 순):
   1. PURPOSE → 직접 매핑 (11종 PURPOSE → template ID)
-  2. CONTEXT[0] → 직접 매핑 (14종 CONTEXT → template ID)
-  3. 기본값: T01_GENERAL
-  4. Topic 오버라이드: REFUND_CANCEL + 거절성 → T11
-  5. 키워드 오버라이드: "환불/취소/반품" + NEGATIVE_FEEDBACK → T11
-  6. S2 강제 삽입: ACCOUNTABILITY 또는 NEGATIVE_FEEDBACK 존재 + S2 없으면 S1 뒤에 삽입
-  7. 페르소나 skip 규칙 적용 → effective_sections
+  2. 기본값: T01_GENERAL
+  3. Topic 오버라이드: REFUND_CANCEL + 거절성 → T11
+  4. 키워드 오버라이드: "환불/취소/반품" + NEGATIVE_FEEDBACK → T11
+  5. S2 강제 삽입: ACCOUNTABILITY 또는 NEGATIVE_FEEDBACK 존재 + S2 없으면 S1 뒤에 삽입
 
 반환: TemplateSelectionResult(template, s2_enforced, effective_sections)
 
@@ -944,10 +905,10 @@ class OrderedSegment:
     must_include: list[str]  # YELLOW 세그먼트의 {{TYPE_N}} 플레이스홀더 목록
 ```
 
-#### `build_final_system_prompt(persona, contexts, tone_level, template, effective_sections) -> str`
+#### `build_final_system_prompt(template, effective_sections, rag_results=None) -> str`
 
 ```
-입력: 메타데이터 + 템플릿 정보
+입력: 템플릿 정보 + RagResults (optional)
 처리:
   1. FINAL_CORE_SYSTEM_PROMPT (~3000 토큰, 고정):
      역할 정의, JSON 입력 형식, 플레이스홀더 규칙, 출력 규칙, 금지 표현,
@@ -955,16 +916,15 @@ class OrderedSegment:
   2. + 템플릿 섹션 블록:
      각 섹션의 label, instruction, length_hint, expression_pool
      T05면 사과 필수 경고 추가, S2면 필수 포함 경고 추가
-  3. + build_dynamic_blocks() (prompt_builder.py):
-     페르소나 블록 (~50 토큰), 컨텍스트 블록 (~30 토큰 each), 톤 블록
+  3. + RAG 시스템 블록 (선택): forbidden/expression_pool/cushion
 
 반환: str (완성된 시스템 프롬프트)
 ```
 
-#### `build_final_user_message(persona, contexts, tone_level, sender_info, ordered_segments, all_locked_spans, situation_analysis, summary_text, template, effective_sections) -> str`
+#### `build_final_user_message(sender_info, ordered_segments, all_locked_spans, situation_analysis, summary_text, template, effective_sections, rag_results=None) -> str`
 
 ```
-입력: 모든 분석 결과 + 메타데이터
+입력: 모든 분석 결과 + sender_info
 
 처리:
   1. (선택) 상황 분석 결과:
@@ -974,9 +934,7 @@ class OrderedSegment:
      ```json
      {
        "meta": {
-         "receiver": "직장 상사",
-         "context": "요청, 사과",
-         "tone": "매우 공손",
+         "tone": "공손",
          "sender": "이름",
          "template": "T01_GENERAL",
          "sections": "S0_GREETING,S1_ACKNOWLEDGE,..."
@@ -995,39 +953,6 @@ class OrderedSegment:
      ```
 
 반환: str (JSON 래핑된 유저 메시지)
-```
-
-### 11-2. PromptBuilder (`app/pipeline/prompt_builder.py`)
-
-#### `build_dynamic_blocks(core_prompt, persona, contexts, tone_level) -> str`
-
-```
-입력: core_prompt (기본 시스템 프롬프트), persona, contexts, tone_level
-처리:
-  core_prompt
-  + _PERSONA_BLOCKS[persona]    (페르소나별 톤/호칭/쿠션/금지 표현 가이드)
-  + "\n\n## 상황" + _CONTEXT_BLOCKS[ctx] for each ctx  (상황별 재작성 가이드)
-  + _TONE_BLOCKS[tone_level]    (말투 강도 가이드)
-반환: 조립된 시스템 프롬프트
-```
-
-#### `get_persona_label(persona) -> str`
-
-```
-BOSS → "직장 상사", CLIENT → "고객", PARENT → "학부모",
-PROFESSOR → "교수", OFFICIAL → "공식 기관", OTHER → "기타"
-```
-
-#### `get_context_label(ctx) -> str`
-
-```
-REQUEST → "요청", SCHEDULE_DELAY → "일정 지연", URGING → "독촉" 등
-```
-
-#### `get_tone_label(tone_level) -> str`
-
-```
-NEUTRAL → "중립", POLITE → "공손", VERY_POLITE → "매우 공손"
 ```
 
 ---
@@ -1103,7 +1028,7 @@ NEUTRAL → "중립", POLITE → "공손", VERY_POLITE → "매우 공손"
 
 ### 13-2. OutputValidator (`app/pipeline/validation/output_validator.py`)
 
-#### `validate(final_text, original_text, spans, raw_llm_output, persona, redaction_map, yellow_segment_texts) -> ValidationResult`
+#### `validate(final_text, original_text, spans, raw_llm_output, redaction_map?, yellow_segment_texts?) -> ValidationResult`
 
 ```
 입력:
@@ -1111,9 +1036,8 @@ NEUTRAL → "중립", POLITE → "공손", VERY_POLITE → "매우 공손"
   original_text: str            # 원본 입력 텍스트
   spans: list[LockedSpan] | None
   raw_llm_output: str | None    # 언마스킹 전 LLM 원본 출력
-  persona: Persona
-  redaction_map: dict[str, str]
-  yellow_segment_texts: list[str]
+  redaction_map: dict[str, str] | None = None
+  yellow_segment_texts: list[str] | None = None
 
 처리 (12개 규칙):
   1. EMOJI (ERROR): 이모지 유니코드 범위 탐지
@@ -1121,7 +1045,7 @@ NEUTRAL → "중립", POLITE → "공손", VERY_POLITE → "매우 공손"
   3. HALLUCINATED_FACT (WARNING): 원문에 없는 3자리+ 숫자 또는 한국어 수량 표현
   4. ENDING_REPETITION (WARNING): 동일 종결어미 3회 연속, "드리겠습니다" 3회 이상
   5. LENGTH_OVEREXPANSION (WARNING): 출력 > 6000자 또는 > 원문 x 3
-  6. PERSPECTIVE_ERROR (WARNING): 화자 관점 오류 ("확인해 드리겠습니다" 등, CLIENT/OFFICIAL 제외)
+  6. PERSPECTIVE_ERROR (WARNING): 화자 관점 오류 ("확인해 드리겠습니다" 등)
   7. LOCKED_SPAN_MISSING (ERROR): raw 출력에 플레이스홀더 없고, 원본 텍스트도 없음
   8. REDACTED_REENTRY (ERROR): RED 원본 텍스트(6자+)가 출력에 재등장
      + REDACTION_TRACE (ERROR): "[삭제됨]", "삭제된 내용" 등 검열 흔적
@@ -1174,7 +1098,7 @@ NEUTRAL → "중립", POLITE → "공손", VERY_POLITE → "매우 공손"
 
 **파일:** `app/pipeline/ai_streaming_service.py`
 
-#### `stream_transform(persona, contexts, tone_level, original_text, user_prompt, sender_info, identity_booster_toggle, topic, purpose, final_max_tokens) -> AsyncGenerator[dict, None]`
+#### `stream_transform(original_text, user_prompt, sender_info, identity_booster_toggle, topic, purpose, final_max_tokens) -> AsyncGenerator[dict, None]`
 
 ```
 입력: API 엔드포인트에서 받은 전체 파라미터
@@ -1263,21 +1187,20 @@ NEUTRAL → "중립", POLITE → "공손", VERY_POLITE → "매우 공손"
 10. app/pipeline/template/                ← structure_template → template_registry → template_selector
 11. app/pipeline/redaction/               ← redaction_service
 12. app/pipeline/multi_model_prompt_builder.py ← 최종 프롬프트 조립
-13. app/pipeline/prompt_builder.py        ← 동적 블록 (페르소나/컨텍스트/톤)
-14. app/pipeline/ai_call_router.py        ← LLM 라우터
-15. app/pipeline/ai_gemini_service.py     ← Gemini API 래퍼
-16. app/pipeline/ai_transform_service.py  ← OpenAI API 래퍼
-17. app/pipeline/validation/output_validator.py ← 14규칙 검증
-18. app/pipeline/ai_streaming_service.py  ← SSE 스트리밍
-19. app/pipeline/text_only_pipeline.py    ← Text-Only 경량 파이프라인
+13. app/pipeline/ai_call_router.py        ← LLM 라우터
+14. app/pipeline/ai_gemini_service.py     ← Gemini API 래퍼
+15. app/pipeline/ai_transform_service.py  ← OpenAI API 래퍼
+16. app/pipeline/validation/output_validator.py ← 14규칙 검증
+17. app/pipeline/ai_streaming_service.py  ← SSE 스트리밍
+18. app/pipeline/text_only_pipeline.py    ← Text-Only 파이프라인 (현재 유일한 활성 파이프라인)
 ```
 
 ---
 
 ## Text-Only Pipeline (`text_only_pipeline.py`)
 
-키보드/확장 프로그램용 경량 파이프라인. 사용자 입력은 **원문만** (+ 선택적 sender_info).
-metadata(persona/contexts/tone) 없이 SA intent로 구동.
+현재 유일한 활성 파이프라인. 사용자 입력은 **원문만** (+ 선택적 sender_info, user_prompt).
+SA intent로 구동, T01_GENERAL 템플릿 고정, POLITE 톤 고정.
 
 ### Flow
 
@@ -1288,20 +1211,15 @@ metadata(persona/contexts/tone) 없이 SA intent로 구동.
                (T01 템플릿 고정)
 ```
 
-### 기존 파이프라인과의 차이
+### 주요 특징
 
-| 항목 | 기존 (metadata) | Text-Only |
-|------|----------------|-----------|
-| 사용자 입력 | persona + contexts[] + tone + 원문 | 원문만 |
-| SA | facts + intent + metadata_check | facts + intent (only) |
-| 라벨링 | metadata 컨텍스트 포함 | 원문 세그먼트만 |
-| 템플릿 선택 | context→template 매핑 (12종) | T01_GENERAL 고정 |
-| Identity Booster | 조건부 실행 | 생략 |
-| Metadata Override | SA가 context 교정 | 없음 |
-| Final 시스템 프롬프트 | persona블록 + context블록 + tone블록 | **SA intent 블록** + POLITE 톤 |
-| Final 유저 메시지 meta | receiver, context, tone | sender만 (있으면) |
-| 쿠션 전략 | 없음 | YELLOW 있을 때 per-segment 병렬 LLM (gemini-2.5-flash-lite) |
-| LLM 호출 수 | 3~5 (SA + Label + Final + Booster? + Refiner?) | 3~4 (SA + Label + [Cushion] + Final, Refiner 조건부) |
+- SA: facts + intent only (metadata_check 없음)
+- 라벨링: 원문 세그먼트만 (메타데이터 없음)
+- 템플릿: T01_GENERAL 고정 (SA의 purpose/topic으로 오버라이드 가능)
+- Final 시스템 프롬프트: SA intent 블록 + POLITE 톤
+- Final 유저 메시지 meta: sender만 (있으면)
+- 쿠션 전략: YELLOW 있을 때 per-segment 병렬 LLM (gemini-2.5-flash-lite)
+- LLM 호출 수: 3~4 (SA + Label + [Cushion] + Final, Refiner 조건부)
 
 ### Functions
 
@@ -1318,17 +1236,19 @@ metadata(persona/contexts/tone) 없이 SA intent로 구동.
 ### SA Text-Only (`situation_analysis_service.analyze_text_only`)
 
 - facts + intent only (metadata_check 제거)
-- 시스템 프롬프트: `SYSTEM_PROMPT_TEXT_ONLY` (규칙 1~8 동일, 메타데이터 검증 섹션 제거)
+- 시스템 프롬프트: `SYSTEM_PROMPT_TEXT_ONLY` (`_SHARED_RULES` 공유 상수로 규칙 1~9 동일, 메타데이터 검증 섹션 제거, few-shot 예시 1개 포함)
+  - 규칙 9: facts 간 논리적 모순 검증 (모순 발견 시 원문 맥락 재확인 후 수정)
 - 유저 메시지: sender_info (있으면) + 원문만
 
 ### Labeling Text-Only (`structure_label_service.label_text_only`)
 
 - 동일 시스템 프롬프트 (`SYSTEM_PROMPT`)
-- 유저 메시지: 세그먼트 목록 + 마스킹된 원문 (persona/contexts/tone 없음)
+- 유저 메시지: 세그먼트 목록 + 마스킹된 원문
 - all-GREEN recovery, coverage 검증, retry 로직 동일
 
-### Endpoint
+### Endpoints
 
-`POST /api/v1/transform/text-only`
-- Request: `TransformTextOnlyRequest { originalText: str, senderInfo?: str }`
-- Response: `TransformResponse { transformedText: str }`
+`POST /api/v1/transform` — 일반 변환
+`POST /api/v1/transform/stream` — SSE 스트리밍 변환
+- Request: `TransformTextOnlyRequest { originalText: str, senderInfo?: str, userPrompt?: str }`
+- Response: `TransformResponse { transformedText: str }` (일반) / SSE 이벤트 스트림 (스트리밍)

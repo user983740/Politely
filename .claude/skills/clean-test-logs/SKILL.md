@@ -1,6 +1,6 @@
 ---
 name: clean-test-logs
-description: Clean test logs (delete by time/pipeline feature criteria)
+description: Clean test logs (delete by time/pipeline feature criteria). Shows current log status if no argument provided.
 disable-model-invocation: true
 ---
 

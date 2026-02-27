@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Reviews changes, commits, and auto-pushes.
+description: Reviews changes, commits, and auto-pushes. If an argument is provided, uses it as the commit message; otherwise auto-generates by analyzing changes.
 disable-model-invocation: true
 ---
 

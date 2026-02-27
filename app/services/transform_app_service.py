@@ -2,7 +2,6 @@ import logging
 
 from app.core.config import settings
 from app.models.domain import TransformResult
-from app.models.enums import Persona, SituationContext, ToneLevel
 from app.pipeline.ai_call_router import call_llm
 from app.pipeline.multi_model_pipeline import AnalysisPhaseResult, execute_analysis, execute_final
 
@@ -12,9 +11,6 @@ logger = logging.getLogger(__name__)
 async def _retrieve_rag(
     original_text: str,
     analysis: AnalysisPhaseResult,
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
 ):
     """Retrieve RAG context for the final prompt. Returns RagResults or None."""
     if not settings.rag_enabled:
@@ -27,13 +23,10 @@ async def _retrieve_rag(
         if rag_index.size == 0:
             return None
 
-        # Build unified query: original text + intent + persona + contexts
+        # Build unified query: original text + intent
         query_parts = [original_text]
         if analysis.situation_analysis and analysis.situation_analysis.intent:
             query_parts.append(analysis.situation_analysis.intent)
-        query_parts.append(persona.value)
-        for ctx in contexts:
-            query_parts.append(ctx.value)
         query = " ".join(query_parts)
 
         # Single embedding call
@@ -52,9 +45,6 @@ async def _retrieve_rag(
         results = rag_index.search(
             query_embedding,
             original_text,
-            persona=persona.value,
-            contexts=[ctx.value for ctx in contexts],
-            tone_level=tone_level.value,
             sections=section_names,
             yellow_labels=yellow_labels,
         )
@@ -70,9 +60,6 @@ async def _retrieve_rag(
 
 
 async def transform(
-    persona: Persona,
-    contexts: list[SituationContext],
-    tone_level: ToneLevel,
     original_text: str,
     user_prompt: str | None,
     sender_info: str | None,
@@ -81,20 +68,17 @@ async def transform(
     validate_transform_request(original_text)
 
     analysis = await execute_analysis(
-        persona, contexts, tone_level, original_text,
+        original_text,
         user_prompt, sender_info, False,
         ai_call_fn=call_llm,
     )
 
     # RAG retrieval (after analysis, before final)
-    rag_results = await _retrieve_rag(original_text, analysis, persona, contexts, tone_level)
+    rag_results = await _retrieve_rag(original_text, analysis)
 
     result = await execute_final(
         settings.gemini_final_model,
         analysis,
-        persona,
-        contexts,
-        tone_level,
         original_text,
         sender_info,
         settings.openai_max_tokens_paid,

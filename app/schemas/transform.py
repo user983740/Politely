@@ -1,21 +1,5 @@
 from pydantic import BaseModel, Field
 
-from app.models.enums import Persona, Purpose, SituationContext, ToneLevel, Topic
-
-
-class TransformRequest(BaseModel):
-    persona: Persona
-    contexts: list[SituationContext] = Field(..., min_length=1)
-    tone_level: ToneLevel = Field(..., alias="toneLevel")
-    original_text: str = Field(..., alias="originalText", min_length=1, max_length=2000)
-    user_prompt: str | None = Field(None, alias="userPrompt", max_length=500)
-    sender_info: str | None = Field(None, alias="senderInfo", max_length=100)
-    identity_booster_toggle: bool | None = Field(None, alias="identityBoosterToggle")
-    topic: Topic | None = None
-    purpose: Purpose | None = None
-
-    model_config = {"populate_by_name": True}
-
 
 class TransformResponse(BaseModel):
     transformed_text: str = Field(..., alias="transformedText", serialization_alias="transformedText")
