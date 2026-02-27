@@ -38,14 +38,13 @@ export default function QualityReportPanel({ stats }: Props) {
 
       {open && (
         <div className="p-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             <StatItem label="세그먼트" value={stats.segmentCount} />
             <StatItem label="보존 (GREEN)" value={stats.greenCount} color="text-emerald-600" />
             <StatItem label="수정 (YELLOW)" value={stats.yellowCount} color="text-amber-600" />
             <StatItem label="제거 (RED)" value={stats.redCount} color="text-red-600" />
             <StatItem label="고정 표현" value={stats.lockedSpanCount} />
             <StatItem label="재시도" value={stats.retryCount} />
-            <GatingItem label="고유명사 보호" fired={stats.identityBoosterFired} />
             <GatingItem label="상황 분석" fired={stats.situationAnalysisFired} />
           </div>
         </div>

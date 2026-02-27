@@ -1,17 +1,10 @@
-import type { Persona, Context, ToneLevel, Topic, Purpose } from '@/shared/config/constants';
 import { API_BASE_URL } from '@/shared/config/constants';
 import { ApiError } from '@/shared/api/client';
 
 export interface StreamTransformRequest {
-  persona: Persona;
-  contexts: Context[];
-  toneLevel: ToneLevel;
   originalText: string;
-  userPrompt?: string;
   senderInfo?: string;
-  identityBoosterToggle?: boolean;
-  topic?: Topic;
-  purpose?: Purpose;
+  userPrompt?: string;
 }
 
 export interface LockedSpanInfo {
@@ -88,6 +81,18 @@ export interface UsageInfo {
   };
 }
 
+export interface CushionStrategyData {
+  overallTone: string;
+  strategies: {
+    segment_id: string;
+    label: string;
+    approach: string;
+    cushion_phrase: string;
+    avoid: string;
+  }[];
+  transitionNotes: string;
+}
+
 export type PipelinePhase =
   | 'normalizing'
   | 'extracting'
@@ -102,6 +107,9 @@ export type PipelinePhase =
   | 'situation_skipped'
   | 'redacting'
   | 'generating'
+  | 'generating_a'
+  | 'cushion_strategizing'
+  | 'generating_b'
   | 'validating'
   | 'complete';
 
@@ -121,6 +129,15 @@ export interface StreamCallbacks {
   onTemplateSelected?: (data: TemplateSelectedData) => void;
   onPhase?: (phase: PipelinePhase) => void;
   onRetry?: () => void;
+  // A/B mode callbacks
+  onDeltaB?: (chunk: string) => void;
+  onDoneA?: (text: string) => void;
+  onDoneB?: (text: string) => void;
+  onValidationA?: (issues: ValidationIssueData[]) => void;
+  onValidationB?: (issues: ValidationIssueData[]) => void;
+  onStatsA?: (stats: Record<string, number>) => void;
+  onStatsB?: (stats: Record<string, number>) => void;
+  onCushionStrategy?: (data: CushionStrategyData) => void;
 }
 
 function getHeaders(): HeadersInit {
@@ -294,6 +311,51 @@ function dispatchEvent(event: string, data: string, callbacks: StreamCallbacks) 
     case 'retry':
       callbacks.onRetry?.();
       break;
+    // A/B mode events
+    case 'delta_b':
+      callbacks.onDeltaB?.(data);
+      break;
+    case 'done_a':
+      callbacks.onDoneA?.(data);
+      break;
+    case 'done_b':
+      callbacks.onDoneB?.(data);
+      break;
+    case 'validation_a':
+      try {
+        callbacks.onValidationA?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'validation_b':
+      try {
+        callbacks.onValidationB?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'stats_a':
+      try {
+        callbacks.onStatsA?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'stats_b':
+      try {
+        callbacks.onStatsB?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
+    case 'cushionStrategy':
+      try {
+        callbacks.onCushionStrategy?.(JSON.parse(data));
+      } catch {
+        // ignore parse error
+      }
+      break;
   }
 }
 
@@ -305,3 +367,10 @@ export function streamTransform(
   return streamSSE(`${API_BASE_URL}/v1/transform/stream`, req, callbacks, signal);
 }
 
+export function streamTransformAB(
+  req: StreamTransformRequest,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamSSE(`${API_BASE_URL}/v1/transform/stream-ab`, req, callbacks, signal);
+}

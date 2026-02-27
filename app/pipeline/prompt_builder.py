@@ -94,6 +94,7 @@ YELLOW 쿠션 표현: "확인 결과" / "검토한 바에 따르면" / "해당 �
 YELLOW 쿠션 표현: "관련하여" / "확인해 보니" / "말씀드리면\"""",
 }
 
+
 # ===== Dynamic context blocks (each ~30 tokens) =====
 
 _CONTEXT_BLOCKS: dict[SituationContext, str] = {

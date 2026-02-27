@@ -56,6 +56,8 @@ interface StepDef {
   /** Phases that mean this step was skipped */
   skipPhases?: PipelinePhase[];
   isLlm?: boolean;
+  /** Only show in A/B mode */
+  abOnly?: boolean;
 }
 
 const STEPS: StepDef[] = [
@@ -70,14 +72,6 @@ const STEPS: StepDef[] = [
     label: '필수 표현 추출',
     activeLabel: '추출 중',
     runPhases: ['extracting'],
-  },
-  {
-    id: 'identity',
-    label: '고유명사 보호',
-    activeLabel: '고유명사 분석 중',
-    runPhases: ['identity_boosting'],
-    skipPhases: ['identity_skipped'],
-    isLlm: true,
   },
   {
     id: 'segment',
@@ -121,11 +115,26 @@ const STEPS: StepDef[] = [
     runPhases: ['redacting'],
   },
   {
+    id: 'cushion_strategy',
+    label: '쿠션 전략 생성',
+    activeLabel: '쿠션 전략 생성 중',
+    runPhases: ['cushion_strategizing'],
+    isLlm: true,
+  },
+  {
     id: 'generate',
     label: '최종 변환',
     activeLabel: '생성 중',
-    runPhases: ['generating'],
+    runPhases: ['generating', 'generating_a'],
     isLlm: true,
+  },
+  {
+    id: 'generate_b',
+    label: '변환 B (쿠션 적용)',
+    activeLabel: '변환 B 생성 중',
+    runPhases: ['generating_b'],
+    isLlm: true,
+    abOnly: true,
   },
   {
     id: 'validate',
@@ -472,6 +481,12 @@ export default function PipelineTracePanel({
   const hasAnyPhase = currentPhase !== null;
   if (!hasAnyPhase && !isComplete) return null;
 
+  // Detect AB mode: if we've seen any AB-specific phase, show AB steps
+  const isAbMode = currentPhase === 'generating_a' || currentPhase === 'generating_b'
+    || prevPhase === 'generating_a' || prevPhase === 'generating_b';
+
+  const visibleSteps = isAbMode ? STEPS : STEPS.filter((s) => !s.abOnly);
+
   const toggleStep = (stepId: string) => {
     setExpandedSteps((prev) => {
       const next = new Set(prev);
@@ -481,7 +496,12 @@ export default function PipelineTracePanel({
     });
   };
 
-  const completedCount = Array.from(statuses.values()).filter(
+  const visibleStatuses = new Map<string, StepStatus>();
+  for (const step of visibleSteps) {
+    visibleStatuses.set(step.id, statuses.get(step.id) ?? 'pending');
+  }
+
+  const completedCount = Array.from(visibleStatuses.values()).filter(
     (s) => s === 'completed' || s === 'skipped',
   ).length;
 
@@ -496,7 +516,7 @@ export default function PipelineTracePanel({
           )}
         </div>
         <span className="text-xs text-text-secondary tabular-nums">
-          {completedCount} / {STEPS.length}
+          {completedCount} / {visibleSteps.length}
         </span>
       </div>
 
@@ -504,14 +524,14 @@ export default function PipelineTracePanel({
       <div className="h-0.5 bg-border/30">
         <div
           className="h-full bg-accent transition-all duration-500 ease-out"
-          style={{ width: `${(completedCount / STEPS.length) * 100}%` }}
+          style={{ width: `${(completedCount / visibleSteps.length) * 100}%` }}
         />
       </div>
 
       {/* Steps */}
       <div className="py-1">
-        {STEPS.map((step, idx) => {
-          const status = statuses.get(step.id) ?? 'pending';
+        {visibleSteps.map((step, idx) => {
+          const status = visibleStatuses.get(step.id) ?? 'pending';
           const isExpanded = expandedSteps.has(step.id);
           const hasContent = status === 'completed' && (
             (step.id === 'extract' && spans && spans.length > 0) ||
@@ -523,7 +543,7 @@ export default function PipelineTracePanel({
             (step.id === 'redact' && processedSegments && processedSegments.length > 0) ||
             (step.id === 'validate' && validationIssues !== null)
           );
-          const isLast = idx === STEPS.length - 1;
+          const isLast = idx === visibleSteps.length - 1;
 
           return (
             <div key={step.id} className="relative">
@@ -554,7 +574,9 @@ export default function PipelineTracePanel({
                           : status === 'skipped' ? 'text-text-secondary/40 line-through'
                             : 'text-text-secondary/60'
                   }`}>
-                    {status === 'running' ? step.activeLabel : step.label}
+                    {status === 'running'
+                      ? (step.id === 'generate' && isAbMode ? '변환 A 생성 중' : step.activeLabel)
+                      : (step.id === 'generate' && isAbMode ? '변환 A (기본)' : step.label)}
                   </span>
                   {status === 'error' && (
                     <span className="text-[10px] px-1 py-0.5 rounded bg-red-50 text-red-500 font-medium">ERROR</span>

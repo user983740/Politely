@@ -1,18 +1,11 @@
 import { create } from 'zustand';
-import type { Persona, Context, ToneLevel, Topic, Purpose } from '@/shared/config/constants';
-import type { LabelData, StatsData, UsageInfo, SegmentData, SituationAnalysisData, ValidationIssueData, PipelinePhase, ProcessedSegmentsData, TemplateSelectedData } from '@/features/transform/stream-api';
+import type { LabelData, StatsData, UsageInfo, SegmentData, SituationAnalysisData, ValidationIssueData, PipelinePhase, ProcessedSegmentsData, TemplateSelectedData, CushionStrategyData } from '@/features/transform/stream-api';
 
 interface TransformState {
-  persona: Persona | null;
-  contexts: Context[];
-  toneLevel: ToneLevel | null;
-  topic: Topic | null;
-  purpose: Purpose | null;
   originalText: string;
   userPrompt: string;
   senderInfo: string;
   transformedText: string;
-  analysisContext: string | null;
   labels: LabelData[] | null;
   pipelineStats: StatsData | null;
   segments: SegmentData[] | null;
@@ -25,17 +18,17 @@ interface TransformState {
   isTransforming: boolean;
   transformError: string | null;
   usageInfo: UsageInfo | null;
-  setPersona: (persona: Persona | null) => void;
-  toggleContext: (context: Context) => void;
-  setToneLevel: (toneLevel: ToneLevel | null) => void;
-  setTopic: (topic: Topic | null) => void;
-  setPurpose: (purpose: Purpose | null) => void;
+  // A/B mode
+  abMode: boolean;
+  transformedTextB: string;
+  validationIssuesA: ValidationIssueData[] | null;
+  validationIssuesB: ValidationIssueData[] | null;
+  pipelineStatsB: Record<string, number> | null;
+  cushionStrategy: CushionStrategyData | null;
   setOriginalText: (text: string) => void;
   setUserPrompt: (prompt: string) => void;
   setSenderInfo: (info: string) => void;
   setTransformedText: (text: string) => void;
-  appendTransformedText: (chunk: string) => void;
-  setAnalysisContext: (ctx: string | null) => void;
   setLabels: (labels: LabelData[] | null) => void;
   setPipelineStats: (stats: StatsData | null) => void;
   setSegments: (segments: SegmentData[] | null) => void;
@@ -48,21 +41,21 @@ interface TransformState {
   setIsTransforming: (v: boolean) => void;
   setTransformError: (error: string | null) => void;
   setUsageInfo: (info: UsageInfo | null) => void;
+  setAbMode: (v: boolean) => void;
+  setTransformedTextB: (text: string) => void;
+  setValidationIssuesA: (issues: ValidationIssueData[] | null) => void;
+  setValidationIssuesB: (issues: ValidationIssueData[] | null) => void;
+  setPipelineStatsB: (stats: Record<string, number> | null) => void;
+  setCushionStrategy: (data: CushionStrategyData | null) => void;
   resetForNewInput: () => void;
   reset: () => void;
 }
 
 const initialState = {
-  persona: null as Persona | null,
-  contexts: [] as Context[],
-  toneLevel: null as ToneLevel | null,
-  topic: null as Topic | null,
-  purpose: null as Purpose | null,
   originalText: '',
   userPrompt: '',
   senderInfo: '',
   transformedText: '',
-  analysisContext: null as string | null,
   labels: null as LabelData[] | null,
   pipelineStats: null as StatsData | null,
   segments: null as SegmentData[] | null,
@@ -75,27 +68,21 @@ const initialState = {
   isTransforming: false,
   transformError: null as string | null,
   usageInfo: null as UsageInfo | null,
+  // A/B mode
+  abMode: false,
+  transformedTextB: '',
+  validationIssuesA: null as ValidationIssueData[] | null,
+  validationIssuesB: null as ValidationIssueData[] | null,
+  pipelineStatsB: null as Record<string, number> | null,
+  cushionStrategy: null as CushionStrategyData | null,
 };
 
 export const useTransformStore = create<TransformState>((set) => ({
   ...initialState,
-  setPersona: (persona) => set({ persona }),
-  toggleContext: (context) =>
-    set((state) => ({
-      contexts: state.contexts.includes(context)
-        ? state.contexts.filter((c) => c !== context)
-        : [...state.contexts, context],
-    })),
-  setToneLevel: (toneLevel) => set({ toneLevel }),
-  setTopic: (topic) => set({ topic }),
-  setPurpose: (purpose) => set({ purpose }),
   setOriginalText: (originalText) => set({ originalText }),
   setUserPrompt: (userPrompt) => set({ userPrompt }),
   setSenderInfo: (senderInfo) => set({ senderInfo }),
   setTransformedText: (transformedText) => set({ transformedText }),
-  appendTransformedText: (chunk) =>
-    set((state) => ({ transformedText: state.transformedText + chunk })),
-  setAnalysisContext: (analysisContext) => set({ analysisContext }),
   setLabels: (labels) => set({ labels }),
   setPipelineStats: (pipelineStats) => set({ pipelineStats }),
   setSegments: (segments) => set({ segments }),
@@ -108,7 +95,13 @@ export const useTransformStore = create<TransformState>((set) => ({
   setIsTransforming: (isTransforming) => set({ isTransforming }),
   setTransformError: (transformError) => set({ transformError }),
   setUsageInfo: (usageInfo) => set({ usageInfo }),
+  setAbMode: (abMode) => set({ abMode }),
+  setTransformedTextB: (transformedTextB) => set({ transformedTextB }),
+  setValidationIssuesA: (validationIssuesA) => set({ validationIssuesA }),
+  setValidationIssuesB: (validationIssuesB) => set({ validationIssuesB }),
+  setPipelineStatsB: (pipelineStatsB) => set({ pipelineStatsB }),
+  setCushionStrategy: (cushionStrategy) => set({ cushionStrategy }),
   resetForNewInput: () =>
-    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', analysisContext: null, labels: null, pipelineStats: null, segments: null, maskedText: null, situationAnalysis: null, processedSegments: null, validationIssues: null, chosenTemplate: null, currentPhase: null, transformError: null, usageInfo: null }),
+    set({ originalText: '', userPrompt: '', senderInfo: '', transformedText: '', labels: null, pipelineStats: null, segments: null, maskedText: null, situationAnalysis: null, processedSegments: null, validationIssues: null, chosenTemplate: null, currentPhase: null, transformError: null, usageInfo: null, transformedTextB: '', validationIssuesA: null, validationIssuesB: null, pipelineStatsB: null, cushionStrategy: null }),
   reset: () => set(initialState),
 }));

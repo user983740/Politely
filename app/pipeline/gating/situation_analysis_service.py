@@ -125,6 +125,55 @@ SYSTEM_PROMPT = (
 )
 
 
+SYSTEM_PROMPT_TEXT_ONLY = (
+    "당신은 한국어 메시지 상황 분석 전문가입니다.\n"
+    "원문에서 객관적 사실(facts)과 화자의 핵심 목적(intent)을 추출합니다.\n\n"
+    "## 규칙\n"
+    "1. facts: 원문에서 직접 읽히는 객관적 사실만 추출 (최대 5개)\n"
+    "2. 각 fact의 content: 사실을 명확한 1문장으로 요약\n"
+    "3. 각 fact의 source: 해당 사실의 근거가 되는 원문 구절을 **정확히 인용** (변형 금지)\n"
+    "4. intent: 화자의 핵심 전달 목적을 1~2문장으로 요약\n"
+    '5. 지시대명사("그거", "이것", "저기") → 원문 맥락에서 해석하여 구체적 대상으로 복원\n'
+    "6. 생략된 주어 → 문맥에서 추론하여 복원\n"
+    "7. `{{TYPE_N}}` 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}})는 그대로 유지\n"
+    "8. 근거 없는 추측 금지. 원문에서 직접 읽히는 것만\n\n"
+    "## 출력 형식 (JSON만, 다른 텍스트 금지)\n"
+    "{\n"
+    '  "facts": [\n'
+    '    {"content": "사실 요약", "source": "원문 그대로 인용"},\n'
+    "    ...\n"
+    "  ],\n"
+    '  "intent": "화자의 핵심 목적"\n'
+    "}"
+)
+
+
+async def analyze_text_only(
+    masked_text: str,
+    sender_info: str | None,
+    ai_call_fn,
+    user_prompt: str | None = None,
+) -> SituationAnalysisResult:
+    """Run text-only situation analysis (facts + intent only, no metadata_check)."""
+    parts: list[str] = []
+    if sender_info and sender_info.strip():
+        parts.append(f"보내는 사람: {sender_info}")
+    if user_prompt and user_prompt.strip():
+        parts.append(f"추가 정보: {user_prompt}")
+    parts.append(f"\n원문:\n{masked_text}")
+
+    user_message = "\n".join(parts)
+
+    try:
+        result: LlmCallResult = await ai_call_fn(
+            MODEL, SYSTEM_PROMPT_TEXT_ONLY, user_message, TEMPERATURE, MAX_TOKENS, None,
+        )
+        return _parse_result_text_only(result)
+    except Exception as e:
+        logger.warning("[SituationAnalysis] Text-only LLM call failed, returning empty result: %s", e)
+        return SituationAnalysisResult(facts=[], intent="", prompt_tokens=0, completion_tokens=0)
+
+
 async def analyze(
     persona: Persona,
     contexts: list[SituationContext],
@@ -310,3 +359,33 @@ def _parse_enum(enum_class, value):
         return enum_class(value.strip())
     except (ValueError, AttributeError):
         return None
+
+
+def _parse_result_text_only(result: LlmCallResult) -> SituationAnalysisResult:
+    """Parse text-only SA response (facts + intent only, no metadata_check)."""
+    try:
+        root = json.loads(result.content)
+
+        facts: list[Fact] = []
+        for fact_node in root.get("facts", []):
+            content = fact_node.get("content", "")
+            source = fact_node.get("source", "")
+            if content:
+                facts.append(Fact(content=content, source=source))
+
+        intent = root.get("intent", "")
+
+        return SituationAnalysisResult(
+            facts=facts,
+            intent=intent,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+        )
+    except Exception as e:
+        logger.warning("[SituationAnalysis] Text-only parse failed: %s", e)
+        return SituationAnalysisResult(
+            facts=[],
+            intent="",
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+        )

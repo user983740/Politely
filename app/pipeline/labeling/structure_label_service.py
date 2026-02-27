@@ -65,7 +65,8 @@ SYSTEM_PROMPT = (
     "- CORE_INTENT: 핵심 요청/목적 (부탁, 제안, 대안, 질문)\n"
     "- REQUEST: 명시적 요청/부탁 — 단, 요청 자체가 수신자에게 부적절하면 YELLOW\n"
     "- APOLOGY: 사과/양해 구하기\n"
-    "- COURTESY: 관례적 예의 (인사, 감사, 호칭)\n"
+    "- COURTESY: 관례적 예의 (인사, 감사, 호칭) + 수신자 상황 공감/인정 "
+    "(\"불편하셨죠\", \"이해합니다\", \"불편하셨던 건 이해함\")\n"
     "핵심: GREEN은 내용/프레이밍 보존 + 표현 적극 재구성(구어체→비즈니스체 전환 포함). "
     "내용의 프레이밍 자체가 바뀌어야 하면(비난→중립, 직접→간접 등) 반드시 YELLOW\n\n"
     "※ GREEN 판단 시 '표현의 뉘앙스/어감/말투'는 고려하지 않습니다. "
@@ -95,13 +96,20 @@ SYSTEM_PROMPT = (
     "업무/이슈에 대한 감정적 반응. \"너무 화가 난다\", \"답답하다\" 등 — 메시지 맥락을 형성하는 감정.\n"
     "→ 삭제 금지. 직접→간접 전환. 협조 의지 마무리.\n"
     "⚠️ EMOTIONAL vs PRIVATE_TMI: 이슈/업무에 대한 감정 → EMOTIONAL. "
-    "발신자 개인 상태(직무 피로, 멘탈, 건강) → PRIVATE_TMI(RED)\n\n"
+    "발신자 개인 상태(직무 피로, 멘탈, 건강) → PRIVATE_TMI(RED)\n"
+    "⚠️ EMOTIONAL vs PURE_GRUMBLE: 사실 맥락이 있는 감정 표현 → EMOTIONAL(YELLOW). "
+    "\"제가 다 책임져야 하는 분위기라 좀 억울합니다\"처럼 상황 설명이 동반된 감정은 YELLOW. "
+    "\"진짜 모르겠다\", \"이게 말이 되냐\"처럼 사실 근거 없이 감정만 토로 → PURE_GRUMBLE(RED).\n\n"
     "**EXCESS_DETAIL** (과잉설명):\n"
     "· 중복/반복: 핵심만 남기고 제거\n"
     "· 추측/가정: ⚠️ 별도 우선 처리. 반드시 가능성 표현 전환 + persona별 확인 표현 추가. 단순 중복 제거로 처리 금지.\n"
     "· 논리 체인: A→B→C 구조는 압축 보존\n"
     "⚠️ vs PRIVATE_TMI: 업무 관련 과잉 설명 → EXCESS_DETAIL. "
-    "개인 사적 정보/건강/가정사 → RED\n\n"
+    "개인 사적 정보/건강/가정사 → RED\n"
+    "⚠️ EXCESS_DETAIL 적용 범위: 주제와 무관한 부연/불필요한 배경 정보에만 사용. "
+    "귀책 지적(→ACCOUNTABILITY), 자기변호(→SELF_JUSTIFICATION), "
+    "상대 비판(→NEGATIVE_FEEDBACK)에는 해당 라벨 사용. "
+    "자문: \"이 내용이 없어도 핵심 메시지 전달에 지장이 없는가?\" → 지장 없으면 EXCESS_DETAIL.\n\n"
     "### RED (삭제) — 4개\n"
     "- AGGRESSION: 공격/비꼬기/도발\n"
     "- PERSONAL_ATTACK: 인신공격 — 상대 인격/능력 비하\n"
@@ -185,7 +193,10 @@ SYSTEM_PROMPT = (
     "- \"~때문에\" 구조: 외부 귀책+불만 결합이면 YELLOW(ACCOUNTABILITY)\n"
     "- 장황한 설명: 핵심 사실 1개 + 동일 내용 반복 2~3개면 반복 부분은 YELLOW(EXCESS_DETAIL)\n"
     "- 감정 간접 표출: \"좀 그런 것 같다\" — 간접이라도 감정이면 YELLOW(EMOTIONAL)\n"
-    "- 방어적 원인 설명: 원인이 객관적이어도 \"~이라서 어쩔 수 없었다\" 구조면 YELLOW(SELF_JUSTIFICATION)\n\n"
+    "- 방어적 원인 설명: 원인이 객관적이어도 \"~이라서 어쩔 수 없었다\" 구조면 YELLOW(SELF_JUSTIFICATION)\n"
+    "- \"이미 했다\" 구조: \"매뉴얼에도 써놨고요\", \"이미 한 상태임\", \"이미 말씀드렸는데\", "
+    "\"~라고 알려드렸는데\" — 사전 조치 강조 = 자기변호 구조 → YELLOW(SELF_JUSTIFICATION). "
+    "CORE_FACT는 객관적 사실 전달이며, \"이미 ~했다\"는 방어적 맥락이 있을 때 제외\n\n"
     "## 예시 1\n\n"
     "받는 사람: 직장 상사\n\n"
     "[세그먼트]\n"
@@ -243,6 +254,135 @@ SYSTEM_PROMPT = (
     "- RED 전 반드시 자문: \"이걸 통째로 삭제하면 메시지가 여전히 이해되는가?\"\n\n"
     "금지: {{TYPE_N}} 형식 플레이스홀더(예: {{DATE_1}}, {{PHONE_1}}) 수정"
 )
+
+
+async def label_text_only(
+    segments: list[Segment],
+    masked_text: str,
+    ai_call_fn,
+) -> StructureLabelResult:
+    """Label segments without metadata (text-only mode).
+
+    Uses the same system prompt and logic as label(), but the user message
+    contains only the segment list and masked text (no persona/contexts/tone).
+    """
+    user_message = _build_user_message_text_only(segments, masked_text)
+
+    result: LlmCallResult = await ai_call_fn(
+        PRIMARY_MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,
+        thinking_budget=THINKING_BUDGET,
+    )
+
+    logger.debug("[StructureLabel] Text-only raw LLM response:\n%s", result.content)
+
+    labeled = _parse_output(result.content, masked_text, segments)
+    summary = _parse_summary(result.content)
+
+    total_prompt = result.prompt_tokens
+    total_completion = result.completion_tokens
+
+    # Validate coverage
+    if not _validate_result(labeled, masked_text, segments):
+        labeled_ids = {ls.segment_id for ls in labeled}
+        missing_ids = [seg.id for seg in segments if seg.id not in labeled_ids]
+
+        logger.warning(
+            "[StructureLabel] Text-only validation failed (parsed %d of %d labels, missing: %s), retrying once",
+            len(labeled), len(segments), missing_ids,
+        )
+        retry_message = (
+            user_message
+            + "\n\n[시스템 경고] 이전 응답에서 다음 세그먼트의 라벨이 누락되었습니다: "
+            + ", ".join(missing_ids)
+            + ". 모든 세그먼트에 라벨을 부여해주세요. "
+            "반드시 SEG_ID|LABEL 형식으로 줄마다 출력하세요. "
+            "코드블록이나 설명 없이 바로 출력하세요."
+        )
+        retry_result: LlmCallResult = await ai_call_fn(
+            PRIMARY_MODEL, SYSTEM_PROMPT, retry_message, TEMPERATURE, MAX_TOKENS, None,
+            thinking_budget=THINKING_BUDGET,
+        )
+
+        logger.debug("[StructureLabel] Text-only retry raw LLM response:\n%s", retry_result.content)
+
+        retry_labeled = _parse_output(retry_result.content, masked_text, segments)
+        retry_summary = _parse_summary(retry_result.content)
+        total_prompt += retry_result.prompt_tokens
+        total_completion += retry_result.completion_tokens
+
+        if retry_labeled:
+            retry_labeled = _fill_missing_labels(retry_labeled, segments)
+            return StructureLabelResult(retry_labeled, retry_summary, total_prompt, total_completion)
+
+        # Both attempts failed — fallback: label all as COURTESY
+        logger.warning(
+            "[StructureLabel] Text-only both attempts failed, falling back to all-COURTESY labels for %d segments",
+            len(segments),
+        )
+        fallback = [
+            LabeledSegment(seg.id, SegmentLabel.COURTESY, seg.text, seg.start, seg.end)
+            for seg in segments
+        ]
+        return StructureLabelResult(fallback, retry_summary, total_prompt, total_completion)
+
+    # All-GREEN recovery (same logic as label())
+    if len(segments) >= 4 and _is_all_green(labeled):
+        logger.warning(
+            "[StructureLabel] Text-only all %d segments labeled GREEN — trying yellow scanner first",
+            len(labeled),
+        )
+
+        from app.pipeline.labeling import yellow_trigger_scanner
+
+        upgrades = yellow_trigger_scanner.scan_yellow_triggers(segments, labeled, None)
+        if upgrades:
+            logger.info(
+                "[StructureLabel] Text-only yellow scanner recovered %d segment(s): %s",
+                len(upgrades),
+                [(u.segment_id, u.new_label.name, u.score) for u in upgrades],
+            )
+            upgraded_map = {u.segment_id: u.new_label for u in upgrades}
+            upgraded_labeled = [
+                LabeledSegment(ls.segment_id, upgraded_map[ls.segment_id], ls.text, ls.start, ls.end)
+                if ls.segment_id in upgraded_map else ls
+                for ls in labeled
+            ]
+            upgraded_labeled = _fill_missing_labels(upgraded_labeled, segments)
+            return StructureLabelResult(
+                upgraded_labeled, summary, total_prompt, total_completion,
+                yellow_recovery_applied=True,
+                yellow_upgrade_count=len(upgrades),
+            )
+
+        # Scanner found nothing — fall back to gpt-4o-mini
+        logger.info(
+            "[StructureLabel] Text-only yellow scanner found no triggers — falling back to FALLBACK_MODEL (%s)",
+            FALLBACK_MODEL,
+        )
+        fallback_result: LlmCallResult = await ai_call_fn(
+            FALLBACK_MODEL, SYSTEM_PROMPT, user_message, TEMPERATURE, MAX_TOKENS, None,
+        )
+
+        logger.debug("[StructureLabel] Text-only fallback model response:\n%s", fallback_result.content)
+
+        fallback_labeled = _parse_output(fallback_result.content, masked_text, segments)
+        fallback_summary = _parse_summary(fallback_result.content)
+        total_prompt += fallback_result.prompt_tokens
+        total_completion += fallback_result.completion_tokens
+
+        if fallback_labeled:
+            has_non_green = any(s.label.tier != SegmentLabelTier.GREEN for s in fallback_labeled)
+            if has_non_green:
+                fallback_labeled = _fill_missing_from_original(fallback_labeled, labeled, segments)
+                return StructureLabelResult(
+                    fallback_labeled,
+                    fallback_summary if fallback_summary else summary,
+                    total_prompt, total_completion,
+                )
+        logger.info("[StructureLabel] Text-only fallback model also all-GREEN — accepting original result")
+
+    labeled = _fill_missing_labels(labeled, segments)
+    return StructureLabelResult(labeled, summary, total_prompt, total_completion)
 
 
 async def label(
@@ -540,6 +680,21 @@ def _fill_missing_from_original(
             else:
                 combined.append(LabeledSegment(seg.id, SegmentLabel.COURTESY, seg.text, seg.start, seg.end))
     return combined
+
+
+def _build_user_message_text_only(
+    segments: list[Segment],
+    masked_text: str,
+) -> str:
+    """Build labeling user message without metadata (text-only mode)."""
+    parts: list[str] = []
+
+    parts.append("[서버 세그먼트]")
+    for seg in segments:
+        parts.append(f"{seg.id}: {seg.text}")
+
+    parts.append(f"\n[마스킹된 원문]\n{masked_text}")
+    return "\n".join(parts)
 
 
 def _validate_result(labeled: list[LabeledSegment], masked_text: str, segments: list[Segment]) -> bool:

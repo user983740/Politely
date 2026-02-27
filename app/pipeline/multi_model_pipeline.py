@@ -467,6 +467,7 @@ def build_final_prompt(
             if ls.label.tier == SegmentLabelTier.YELLOW
             else []
         )
+
         ordered_segments.append(prompt_builder_final.OrderedSegment(
             id=ls.segment_id,
             order=i + 1,
@@ -518,7 +519,9 @@ async def execute_final(
 
     start_time = time.monotonic()
 
-    prompt = build_final_prompt(analysis, persona, contexts, tone_level, sender_info, rag_results=rag_results)
+    prompt = build_final_prompt(
+        analysis, persona, contexts, tone_level, sender_info, rag_results=rag_results,
+    )
 
     # Extract YELLOW segment texts for Rule 11
     yellow_texts = [s.text for s in analysis.labeled_segments if s.label.tier == SegmentLabelTier.YELLOW]

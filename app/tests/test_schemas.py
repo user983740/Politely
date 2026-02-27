@@ -3,9 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from app.models.enums import Persona, SituationContext, ToneLevel
 from app.schemas.auth import AuthResponse, CheckLoginIdRequest, SignupRequest, VerifyCodeRequest
-from app.schemas.transform import TierInfoResponse, TransformRequest
+from app.schemas.transform import TierInfoResponse, TransformTextOnlyRequest
 
 # --- SignupRequest password validation ---
 
@@ -68,38 +67,22 @@ def test_check_login_id_rejects_too_long():
         CheckLoginIdRequest(login_id="a" * 31)
 
 
-# --- TransformRequest ---
+# --- TransformTextOnlyRequest ---
 
 
-def test_transform_request_rejects_empty_text():
+def test_text_only_request_rejects_empty_text():
     with pytest.raises(ValidationError):
-        TransformRequest(
-            persona=Persona.BOSS,
-            contexts=[SituationContext.REQUEST],
-            tone_level=ToneLevel.POLITE,
-            original_text="",
-        )
+        TransformTextOnlyRequest(original_text="")
 
 
-def test_transform_request_rejects_too_long_text():
+def test_text_only_request_rejects_too_long_text():
     with pytest.raises(ValidationError):
-        TransformRequest(
-            persona=Persona.BOSS,
-            contexts=[SituationContext.REQUEST],
-            tone_level=ToneLevel.POLITE,
-            original_text="x" * 2001,
-        )
+        TransformTextOnlyRequest(original_text="x" * 2001)
 
 
-def test_transform_request_accepts_valid():
-    req = TransformRequest(
-        persona=Persona.BOSS,
-        contexts=[SituationContext.REQUEST],
-        tone_level=ToneLevel.POLITE,
-        original_text="안녕하세요",
-    )
+def test_text_only_request_accepts_valid():
+    req = TransformTextOnlyRequest(original_text="안녕하세요")
     assert req.original_text == "안녕하세요"
-    assert req.persona == Persona.BOSS
 
 
 # --- Serialization aliases ---
